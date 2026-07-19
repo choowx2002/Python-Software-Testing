@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+/* *,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+} */
+
+html,
+body,
+#app {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  font-family: 'Inter', 'Segoe UI', 'SF Pro Display', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  font-feature-settings: 'liga' 1, 'calt' 1; /* 启用连字 */
+}
+
+body {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 但输入框、代码块、日志等需要选中的地方恢复 */
+input,
+textarea,
+[contenteditable='true'],
+.font-mono {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* 去除按钮/链接的默认 outline，改用自定义 focus ring */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible {
+  outline: 2px solid rgb(16 185 129 / 0.4); /* emerald-500 */
+  outline-offset: 1px;
+}
+
+/* ✅ 5. 滚动条美化（极客极简风） */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(228 228 231 / 0.6); /* zinc-200 */
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(161 161 170 / 0.8); /* zinc-400 */
+}
