@@ -13,10 +13,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div
-    class="h-screen w-screen overflow-hidden bg-slate-50 text-slate-900 antialiased"
-    data-tauri-drag-region
-  >
+  <div class="h-screen w-screen overflow-hidden bg-slate-50 text-slate-900 antialiased">
     <router-view v-slot="{ Component }">
       <transition name="fade" mode="out-in">
         <component :is="Component" />
@@ -31,6 +28,7 @@ onUnmounted(() => {
 .fade-leave-active {
   transition: opacity 150ms ease;
 }
+
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;

@@ -2,6 +2,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
+use tauri::Emitter;
 
 // ============================================
 // Data Structures
@@ -12,7 +13,9 @@ pub struct EnvDetectionResult {
     pub python_path: Option<String>,
     pub python_version: Option<String>,
     pub venv_path: Option<String>,
-    pub venv_activated: bool,
+    // 重命名: venv_activated -> venv_exists 
+    // 语义更准确：表示 Tauri 找到了可用的 venv 目录，可直接调用其 python，无需 shell activate
+    pub venv_exists: bool, 
     pub dependencies: Vec<DependencyStatus>,
 }
 
@@ -23,12 +26,23 @@ pub struct DependencyStatus {
     pub version: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct PipPackage {
+    name: String,
+    version: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InstallResult {
     pub success: bool,
     pub installed: Vec<String>,
     pub failed: Vec<String>,
-    pub logs: String,
+}
+
+#[derive(Debug, Serialize, Clone)] 
+pub struct InstallStep {
+    pub package: String,
+    pub status: String, // "starting", "success", "failed"
 }
 
 // ============================================
@@ -37,94 +51,156 @@ pub struct InstallResult {
 #[tauri::command]
 pub async fn detect_python_env(project_path: String) -> Result<EnvDetectionResult, String> {
     let path = PathBuf::from(&project_path);
+
     if !path.exists() || !path.is_dir() {
-        return Err("Invalid project directory".to_string());
+        return Err("Invalid project directory".into());
     }
 
     let mut result = EnvDetectionResult {
         python_path: None,
         python_version: None,
         venv_path: None,
-        venv_activated: false,
-        dependencies: vec![],
+        venv_exists: false,
+        dependencies: Vec::new(),
     };
 
-    // 1. Detect virtual environment (try common names)
-    let venv_candidates = ["venv", ".venv", "env", ".env"];
-    for candidate in &venv_candidates {
+    // ----------------------------------------
+    // 1. Detect Virtual Environment
+    // ----------------------------------------
+    let venv_candidates = [".venv", "venv"];
+
+    for candidate in venv_candidates {
         let venv_dir = path.join(candidate);
-        if venv_dir.exists() {
-            result.venv_path = Some(venv_dir.to_string_lossy().to_string());
-            
-            // Find python executable inside venv
-            let python_in_venv = if cfg!(target_os = "windows") {
-                venv_dir.join("Scripts").join("python.exe")
-            } else {
-                venv_dir.join("bin").join("python")
-            };
-            
-            if python_in_venv.exists() {
-                result.python_path = Some(python_in_venv.to_string_lossy().to_string());
-                result.venv_activated = true;
-                break;
-            }
+        if !venv_dir.exists() {
+            continue;
         }
-    }
 
-    // 2. Fallback to system Python if no venv found
-    if result.python_path.is_none() {
-        let system_python = if cfg!(target_os = "windows") {
-            "python"
+        let python_path = if cfg!(target_os = "windows") {
+            venv_dir.join("Scripts").join("python.exe")
         } else {
-            "python3"
+            venv_dir.join("bin").join("python")
         };
+
+        if python_path.exists() {
+            result.venv_exists = true;
+            result.venv_path = Some(venv_dir.to_string_lossy().to_string());
+            result.python_path = Some(python_path.to_string_lossy().to_string());
+            break;
+        }
+    }
+
+    // ----------------------------------------
+    // 2. Fallback: Detect Global Python (If no venv found)
+    // ----------------------------------------
+    if !result.venv_exists {
+        let global_python = if cfg!(target_os = "windows") { "python" } else { "python3" };
         
-        if let Ok(output) = Command::new(system_python).arg("--version").output() {
+        if let Ok(output) = Command::new(global_python).arg("--version").output() {
             if output.status.success() {
-                result.python_path = Some(system_python.to_string());
+                let version = if output.stdout.is_empty() {
+                    String::from_utf8_lossy(&output.stderr).trim().to_string()
+                } else {
+                    String::from_utf8_lossy(&output.stdout).trim().to_string()
+                };
+                result.python_path = Some(global_python.to_string());
+                result.python_version = Some(version);
             }
         }
+        // 注意：如果没有 venv 也没有全局 python，这里会返回 python_path 为 None 的结果
+        // 前端可以根据 python_path.is_none() 提示用户安装 Python
+        return Ok(result);
     }
 
-    // 3. Get Python version
-    if let Some(python_path) = &result.python_path {
-        if let Ok(output) = Command::new(python_path).arg("--version").output() {
-            if output.status.success() {
-                let version_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                result.python_version = Some(version_str);
-            }
-        }
-    }
-
-    // 4. Check required dependencies
-    let required_deps = ["pytest", "coverage", "pynguin"];
-    if let Some(python_path) = &result.python_path {
-        for dep in &required_deps {
-            let mut dep_status = DependencyStatus {
-                name: dep.to_string(),
-                installed: false,
-                version: None,
+    // ----------------------------------------
+    // 3. Python Version (for existing venv)
+    // ----------------------------------------
+    let python_path = result.python_path.as_ref().unwrap();
+    if let Ok(output) = Command::new(python_path).arg("--version").output() {
+        if output.status.success() {
+            let version = if output.stdout.is_empty() {
+                String::from_utf8_lossy(&output.stderr).trim().to_string()
+            } else {
+                String::from_utf8_lossy(&output.stdout).trim().to_string()
             };
-            
-            // Use pip show to check if package is installed
-            if let Ok(output) = Command::new(python_path)
-                .args(["-m", "pip", "show", dep])
-                .output()
-            {
-                if output.status.success() {
-                    dep_status.installed = true;
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    // Parse version from "Version: x.y.z"
-                    for line in stdout.lines() {
-                        if line.starts_with("Version:") {
-                            dep_status.version = Some(line.trim_start_matches("Version:").trim().to_string());
-                            break;
-                        }
-                    }
+            result.python_version = Some(version);
+        }
+    }
+
+    // ----------------------------------------
+    // 4. Dependency Detection (requirements.txt vs venv)
+    // ----------------------------------------
+    
+    // 4.1 尝试从 requirements.txt 读取项目声明的依赖
+    let mut required_deps: Vec<String> = Vec::new();
+    let req_file_path = path.join("requirements.txt");
+    
+    if req_file_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&req_file_path) {
+            for line in content.lines() {
+                let line = line.trim();
+                // 跳过空行和注释
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                // 简单解析包名：处理 "package==1.0", "package>=1.0", "package[extra]" 等情况
+                // 按常见分隔符分割，取第一部分作为包名
+                let pkg_name = line
+                    .split(|c| c == '=' || c == '>' || c == '<' || c == '~' || c == '[' || c == ' ')
+                    .next()
+                    .unwrap_or(line)
+                    .trim()
+                    .to_lowercase();
+                
+                if !pkg_name.is_empty() {
+                    required_deps.push(pkg_name);
                 }
             }
-            
-            result.dependencies.push(dep_status);
+        }
+    }
+
+    // 4.2 如果没找到 requirements.txt，回退到你的默认硬编码列表
+    if required_deps.is_empty() {
+        required_deps = vec!["pytest".to_string(), "coverage".to_string(), "pynguin".to_string()];
+    }
+
+    // 4.3 检查这些依赖在当前 Python 环境 (venv) 中的安装状态
+    match Command::new(python_path)
+        .args(["-m", "pip", "list", "--format=json"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let installed_packages: Vec<PipPackage> =
+                serde_json::from_str(&stdout).unwrap_or_default();
+
+            for dep in required_deps {
+                if let Some(pkg) = installed_packages
+                    .iter()
+                    .find(|p| p.name.eq_ignore_ascii_case(&dep))
+                {
+                    result.dependencies.push(DependencyStatus {
+                        name: dep.clone(),
+                        installed: true,
+                        version: Some(pkg.version.clone()),
+                    });
+                } else {
+                    result.dependencies.push(DependencyStatus {
+                        name: dep.clone(),
+                        installed: false,
+                        version: None,
+                    });
+                }
+            }
+        }
+        _ => {
+            // pip list 失败时，将所有声明的依赖标记为未安装
+            for dep in required_deps {
+                result.dependencies.push(DependencyStatus {
+                    name: dep,
+                    installed: false,
+                    version: None,
+                });
+            }
         }
     }
 
@@ -136,6 +212,7 @@ pub async fn detect_python_env(project_path: String) -> Result<EnvDetectionResul
 // ============================================
 #[tauri::command]
 pub async fn install_dependencies(
+    app: tauri::AppHandle,
     python_path: String,
     packages: Vec<String>,
 ) -> Result<InstallResult, String> {
@@ -144,33 +221,41 @@ pub async fn install_dependencies(
             success: true,
             installed: vec![],
             failed: vec![],
-            logs: "No packages to install".to_string(),
         });
     }
 
     let mut installed = vec![];
     let mut failed = vec![];
-    let mut all_logs = String::new();
+    // 🧹 移除了 let mut all_logs = String::new();
 
     for package in &packages {
+        // 1️⃣ Emit: 开始安装
+        let _ = app.emit("install_step", InstallStep {
+            package: package.clone(),
+            status: "starting".to_string(),
+        });
+
         let output = Command::new(&python_path)
             .args(["-m", "pip", "install", package])
-            .output();
+            .output()
+            .map_err(|e| format!("Failed to execute pip for {}: {}", package, e))?;
 
-        match output {
-            Ok(out) if out.status.success() => {
-                installed.push(package.clone());
-                all_logs.push_str(&format!("[OK] {} installed successfully\n", package));
-            }
-            Ok(out) => {
-                failed.push(package.clone());
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                all_logs.push_str(&format!("[FAIL] {} installation failed: {}\n", package, stderr));
-            }
-            Err(e) => {
-                failed.push(package.clone());
-                all_logs.push_str(&format!("[FAIL] {} error: {}\n", package, e));
-            }
+        if output.status.success() {
+            installed.push(package.clone());
+            
+            // 2️⃣ Emit: 安装成功
+            let _ = app.emit("install_step", InstallStep {
+                package: package.clone(),
+                status: "success".to_string(),
+            });
+        } else {
+            failed.push(package.clone());
+            
+            // 3️⃣ Emit: 安装失败
+            let _ = app.emit("install_step", InstallStep {
+                package: package.clone(),
+                status: "failed".to_string(),
+            });
         }
     }
 
@@ -178,7 +263,6 @@ pub async fn install_dependencies(
         success: failed.is_empty(),
         installed,
         failed,
-        logs: all_logs,
     })
 }
 
@@ -196,17 +280,68 @@ pub async fn validate_project_directory(project_path: String) -> Result<bool, St
         return Err("Path is not a directory".to_string());
     }
     
-    // Check if it looks like a Python project (has at least one .py file)
-    let has_python_files = std::fs::read_dir(&path)
-        .map_err(|e| e.to_string())?
+    // 放宽校验：检查 .py 文件或常见的 Python 项目配置文件
+    let has_python_indicators = std::fs::read_dir(&path)
+        .map_err(|e| format!("Failed to read directory: {}", e))?
         .filter_map(|entry| entry.ok())
         .any(|entry| {
-            entry.path().extension().map_or(false, |ext| ext == "py")
+            let file_name = entry.file_name();
+            let name_str = file_name.to_string_lossy();
+            name_str.ends_with(".py") ||
+            name_str.eq_ignore_ascii_case("requirements.txt") ||
+            name_str.eq_ignore_ascii_case("pyproject.toml") ||
+            name_str.eq_ignore_ascii_case("setup.py") ||
+            name_str.eq_ignore_ascii_case("Pipfile")
         });
     
-    if !has_python_files {
-        return Err("No Python files (.py) found in the selected directory".to_string());
+    if !has_python_indicators {
+        return Err("No Python files (.py) or common project configuration files (requirements.txt, pyproject.toml, etc.) found in the selected directory".to_string());
     }
     
     Ok(true)
+}
+
+// ============================================
+// Command 4: Create Virtual Environment
+// ============================================
+#[tauri::command]
+pub async fn create_virtual_env(
+    project_path: String,
+    python_executable: String,
+) -> Result<String, String> {
+    let path = PathBuf::from(&project_path);
+    let venv_dir = path.join(".venv");
+
+    // 幂等性检查：如果 .venv 已存在，先验证它是否有效
+    if venv_dir.exists() {
+        let test_python = if cfg!(target_os = "windows") {
+            venv_dir.join("Scripts").join("python.exe")
+        } else {
+            venv_dir.join("bin").join("python")
+        };
+        
+        if test_python.exists() {
+            if let Ok(output) = Command::new(&test_python).arg("--version").output() {
+                if output.status.success() {
+                    // 已经是一个有效的虚拟环境，直接返回成功，避免重复创建
+                    return Ok(venv_dir.to_string_lossy().to_string());
+                }
+            }
+        }
+        // 如果存在但无效（例如损坏的目录），返回明确错误，避免意外覆盖用户数据
+        return Err("A corrupted or invalid '.venv' directory already exists. Please remove it manually and try again.".to_string());
+    }
+
+    // 执行创建命令
+    let output = Command::new(&python_executable)
+        .current_dir(&path)
+        .args(["-m", "venv", ".venv"])
+        .output()
+        .map_err(|e| format!("Failed to execute python executable: {}", e))?;
+
+    if output.status.success() {
+        Ok(venv_dir.to_string_lossy().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
 }

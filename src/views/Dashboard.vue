@@ -18,6 +18,7 @@ import {
   X,
   Terminal,
 } from "@lucide/vue";
+import { ask } from "@tauri-apps/plugin-dialog";
 
 const router = useRouter();
 const projectStore = useProjectStore();
@@ -25,14 +26,18 @@ const projectStore = useProjectStore();
 // 搜索关键词
 const searchQuery = ref("");
 
-// 过滤后的项目列表
 const filteredProjects = computed(() => {
-  if (!searchQuery.value) return projectStore.projects;
+  // 确保 projects 始终是一个数组，防止 undefined 报错
+  const projects = projectStore.projects || [];
+
+  if (!searchQuery.value) return projects;
+
   const query = searchQuery.value.toLowerCase();
-  return projectStore.projects.filter(
+  return projects.filter(
     (p) =>
-      p.name.toLowerCase().includes(query) ||
-      p.path.toLowerCase().includes(query),
+      // 使用 ?. 防止 name 或 path 为 null/undefined 时 toLowerCase 报错
+      p.name?.toLowerCase().includes(query) ||
+      p.path?.toLowerCase().includes(query)
   );
 });
 
@@ -84,43 +89,49 @@ onMounted(() => {
 
 // 路由跳转
 const goToImport = () => router.push("/projects/import");
-const goToProject = (id: string) => router.push(`/projects/${id}/execute`);
+const goToProject = (id: number) => router.push(`/projects/${id}/execute`);
+
+const handleDelete = async (projectId: number, projectName: string) => {
+  const deleteConfirm = await ask(`Are you sure you want to delete "${projectName}"? This will remove all associated test history.`)
+  if (!deleteConfirm) {
+    return
+  }
+
+  try {
+    await projectStore.deleteProject(projectId)
+    console.log('Project deleted successfully')
+  } catch (error) {
+    console.error('Failed to delete project', error)
+  }
+}
 </script>
 
 <template>
-  <div
-    class="flex h-screen w-screen overflow-hidden bg-slate-50 text-slate-900"
-  >
+  <div class="flex h-screen w-screen overflow-hidden bg-slate-50 text-slate-900">
     <!-- LEFT PANE: Actions & Navigation -->
-    <aside class="w-72 bg-white border-r border-zinc-200/80 flex flex-col">
+    <aside class="w-64 bg-white border-r border-zinc-200/80 flex flex-col">
       <div class="px-6 pt-8 pb-6">
         <div class="flex items-center gap-2.5">
           <div
-            class="w-8 h-8 bg-linear-to-br from-emerald-500 to-emerald-600 rounded-md flex items-center justify-center shadow-sm"
-          >
+            class="w-8 h-8 bg-linear-to-br from-emerald-500 to-emerald-600 rounded-md flex items-center justify-center shadow-sm">
             <img src="/src/assets/app-icon-sm.png" />
           </div>
           <div>
-            <h1 class="text-sm font-semibold text-slate-800">PyTest Auto</h1>
+            <h1 class="text-sm font-semibold text-slate-800">Testmate</h1>
             <p class="text-[10px] text-slate-500">Testing & Coverage Suite</p>
           </div>
         </div>
       </div>
 
       <div class="px-4 flex-1">
-        <p
-          class="px-2 text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2"
-        >
+        <p class="px-2 text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2">
           Quick Actions
         </p>
         <div class="space-y-0.5">
-          <button
-            @click="goToImport"
-            class="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left group active:scale-[0.99]"
-          >
+          <button @click="goToImport"
+            class="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left group active:scale-[0.99]">
             <div
-              class="w-7 h-7 bg-emerald-50 rounded-md flex items-center justify-center group-hover:bg-emerald-100 transition-colors"
-            >
+              class="w-7 h-7 bg-emerald-50 rounded-md flex items-center justify-center group-hover:bg-emerald-100 transition-colors">
               <FolderPlus class="w-3.5 h-3.5 text-emerald-500" />
             </div>
             <div>
@@ -132,11 +143,9 @@ const goToProject = (id: string) => router.push(`/projects/${id}/execute`);
           </button>
 
           <button
-            class="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left group active:scale-[0.99]"
-          >
+            class="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left group active:scale-[0.99]">
             <div
-              class="w-7 h-7 bg-blue-50 rounded-md flex items-center justify-center group-hover:bg-blue-100 transition-colors"
-            >
+              class="w-7 h-7 bg-blue-50 rounded-md flex items-center justify-center group-hover:bg-blue-100 transition-colors">
               <GitBranch class="w-3.5 h-3.5 text-blue-500" />
             </div>
             <div>
@@ -148,11 +157,9 @@ const goToProject = (id: string) => router.push(`/projects/${id}/execute`);
           </button>
 
           <button
-            class="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left group active:scale-[0.99]"
-          >
+            class="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left group active:scale-[0.99]">
             <div
-              class="w-7 h-7 bg-indigo-50 rounded-md flex items-center justify-center group-hover:bg-indigo-100 transition-colors"
-            >
+              class="w-7 h-7 bg-indigo-50 rounded-md flex items-center justify-center group-hover:bg-indigo-100 transition-colors">
               <Sparkles class="w-3.5 h-3.5 text-indigo-500" />
             </div>
             <div>
@@ -164,42 +171,30 @@ const goToProject = (id: string) => router.push(`/projects/${id}/execute`);
           </button>
         </div>
 
-        <p
-          class="px-2 text-[10px] font-semibold text-slate-400 uppercase tracking-wider mt-6 mb-2"
-        >
+        <p class="px-2 text-[10px] font-semibold text-slate-400 uppercase tracking-wider mt-6 mb-2">
           Resources
         </p>
         <div class="space-y-0.5">
-          <a
-            href="#"
-            class="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left"
-          >
+          <a href="#" class="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left">
             <BookOpen class="w-3.5 h-3.5 text-slate-400" />
             <span class="text-[13px] text-slate-600">Documentation</span>
           </a>
-          <a
-            href="#"
-            class="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left"
-          >
+          <a href="#" class="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left">
             <Bug class="w-3.5 h-3.5 text-slate-400" />
             <span class="text-[13px] text-slate-600">Report Issue</span>
           </a>
         </div>
       </div>
-       <div class="px-4 mt-4 border-t border-zinc-200/80 pt-4">
-          <p
-            class="px-2 text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2"
-          >
-            Debug
-          </p>
-          <button
-            @click="$router.push('/debug/schema')"
-            class="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left"
-          >
-            <Database class="w-3.5 h-3.5 text-slate-400" />
-            <span class="text-[13px] text-slate-600">View DB Schema</span>
-          </button>
-        </div>
+      <div class="px-4 mt-4 border-t border-zinc-200/80 pt-4">
+        <p class="px-2 text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2">
+          Debug
+        </p>
+        <button @click="$router.push('/debug/schema')"
+          class="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left">
+          <Database class="w-3.5 h-3.5 text-slate-400" />
+          <span class="text-[13px] text-slate-600">View DB Schema</span>
+        </button>
+      </div>
 
       <div class="px-6 py-4 border-t border-zinc-200/80">
         <p class="text-[10px] text-slate-400 font-mono">
@@ -211,38 +206,26 @@ const goToProject = (id: string) => router.push(`/projects/${id}/execute`);
     <!-- RIGHT PANE: Project Management -->
     <main class="flex-1 flex flex-col overflow-hidden bg-slate-50">
       <!-- Toolbar -->
-      <div
-        class="h-14 px-6 flex items-center justify-between border-b border-zinc-200/80 bg-white"
-      >
+      <div class="h-14 px-6 flex items-center justify-between border-b border-zinc-200/80 bg-white">
         <div class="flex items-center gap-3">
           <h2 class="text-sm font-semibold text-slate-800">Projects</h2>
-          <span
-            class="px-1.5 py-0.5 bg-slate-100 text-slate-500 text-[10px] font-mono rounded"
-          >
+          <span class="px-1.5 py-0.5 bg-slate-100 text-slate-500 text-[10px] font-mono rounded">
             {{ projectStore.projects.length }}
           </span>
         </div>
         <div class="flex items-center gap-2">
           <div class="relative">
-            <Search
-              class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2"
-            />
-            <input
-              v-model="searchQuery"
-              type="text"
-              placeholder="Search projects..."
-              class="pl-8 pr-3 py-1.5 bg-slate-50 border border-zinc-200/80 rounded-md text-xs w-56 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/40 transition-all"
-            />
+            <Search class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+            <input v-model="searchQuery" type="text" placeholder="Search projects..."
+              class="pl-8 pr-3 py-1.5 bg-slate-50 border border-zinc-200/80 rounded-md text-xs w-56 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/40 transition-all" />
           </div>
           <button
-            class="flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-zinc-200/80 rounded-md text-xs text-slate-600 hover:bg-slate-50 transition-all active:scale-[0.98]"
-          >
+            class="flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-zinc-200/80 rounded-md text-xs text-slate-600 hover:bg-slate-50 transition-all active:scale-[0.98]">
             <SlidersHorizontal class="w-3.5 h-3.5" />
             <span>Filter</span>
           </button>
           <button
-            class="flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-zinc-200/80 rounded-md text-xs text-slate-600 hover:bg-slate-50 transition-all active:scale-[0.98]"
-          >
+            class="flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-zinc-200/80 rounded-md text-xs text-slate-600 hover:bg-slate-50 transition-all active:scale-[0.98]">
             <ArrowUpDown class="w-3.5 h-3.5" />
             <span>Last Opened</span>
           </button>
@@ -252,20 +235,13 @@ const goToProject = (id: string) => router.push(`/projects/${id}/execute`);
       <!-- Content Area -->
       <div class="flex-1 overflow-auto">
         <!-- Empty State (当没有项目或搜索无结果时) -->
-        <div
-          v-if="projectStore.isLoading"
-          class="flex flex-col items-center justify-center h-full text-slate-400"
-        >
-          <div
-            class="w-8 h-8 border-2 border-slate-200 border-t-emerald-500 rounded-full animate-spin mb-3"
-          ></div>
+        <div v-if="projectStore.isLoading" class="flex flex-col items-center justify-center h-full text-slate-400">
+          <div class="w-8 h-8 border-2 border-slate-200 border-t-emerald-500 rounded-full animate-spin mb-3"></div>
           <p class="text-sm">Loading projects...</p>
         </div>
 
-        <div
-          v-else-if="filteredProjects.length === 0"
-          class="flex flex-col items-center justify-center h-full text-slate-400"
-        >
+        <div v-else-if="filteredProjects.length === 0"
+          class="flex flex-col items-center justify-center h-full text-slate-400">
           <FolderPlus class="w-12 h-12 mb-3 text-slate-300" />
           <p class="text-sm font-medium text-slate-600 mb-1">
             {{
@@ -277,10 +253,8 @@ const goToProject = (id: string) => router.push(`/projects/${id}/execute`);
           <p class="text-xs mb-4">
             Get started by importing a local Python directory.
           </p>
-          <button
-            @click="goToImport"
-            class="px-4 py-2 bg-emerald-500 text-white text-xs font-medium rounded-md hover:bg-emerald-600 transition-colors active:scale-[0.98]"
-          >
+          <button @click="goToImport"
+            class="px-4 py-2 bg-emerald-500 text-white text-xs font-medium rounded-md hover:bg-emerald-600 transition-colors active:scale-[0.98]">
             Import Project
           </button>
         </div>
@@ -289,8 +263,7 @@ const goToProject = (id: string) => router.push(`/projects/${id}/execute`);
         <div v-else>
           <!-- Table Header -->
           <div
-            class="px-6 py-2 bg-slate-50 border-b border-zinc-200/80 grid grid-cols-[4fr_1.5fr_2fr_2.5fr_1.5fr] gap-4 text-[10px] font-semibold text-slate-400 uppercase tracking-wider sticky top-0 z-10"
-          >
+            class="px-6 py-2 bg-slate-50 border-b border-zinc-200/80 grid grid-cols-[4fr_1.5fr_2fr_2.5fr_1.5fr] gap-4 text-[10px] font-semibold text-slate-400 uppercase tracking-wider sticky top-0 z-10">
             <div>Project</div>
             <div>Environment</div>
             <div>Last Test Result</div>
@@ -300,17 +273,13 @@ const goToProject = (id: string) => router.push(`/projects/${id}/execute`);
 
           <!-- Rows -->
           <div class="divide-y divide-zinc-200/80 bg-white">
-            <div
-              v-for="project in filteredProjects"
-              :key="project.id"
-              @click="goToProject(project.id)"
-              class="px-6 py-3.5 hover:bg-slate-50 transition-colors cursor-pointer grid grid-cols-[4fr_1.5fr_2fr_2.5fr_1.5fr] gap-4 items-center group"
-            >
+            <div v-for="project in filteredProjects" :key="project.id" @click="goToProject(project.id)"
+              @contextmenu="handleDelete(project.id, project.name)"
+              class="px-6 py-3.5 hover:bg-slate-50 transition-colors cursor-pointer grid grid-cols-[4fr_1.5fr_2fr_2.5fr_1.5fr] gap-4 items-center group">
               <!-- Project Info -->
               <div class="flex items-center gap-3 min-w-0">
                 <div
-                  class="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-600 rounded-md flex items-center justify-center flex-shrink-0"
-                >
+                  class="w-8 h-8 bg-linear-to-br from-blue-500 to-blue-600 rounded-md flex items-center justify-center shrink-0">
                   <Code2 class="w-4 h-4 text-white" />
                 </div>
                 <div class="min-w-0">
@@ -325,74 +294,47 @@ const goToProject = (id: string) => router.push(`/projects/${id}/execute`);
 
               <!-- Environment Status with Tooltip -->
               <div class="relative">
-                <button
-                  class="flex items-center gap-1.5 px-2 py-1 rounded hover:bg-slate-100 transition-colors"
-                >
-                  <span
-                    :class="`w-1.5 h-1.5 rounded-full ${getStatusColor(project.env_status)}`"
-                  ></span>
-                  <span
-                    :class="`text-[11px] ${getStatusTextColor(project.env_status)}`"
-                    >{{ project.env_status }}</span
-                  >
+                <button class="flex items-center gap-1.5 px-2 py-1 rounded hover:bg-slate-100 transition-colors">
+                  <span :class="`w-1.5 h-1.5 rounded-full ${getStatusColor(project.env_status)}`"></span>
+                  <span :class="`text-[11px] ${getStatusTextColor(project.env_status)}`">{{ project.env_status }}</span>
                 </button>
                 <!-- Tooltip -->
-                <div
-                  class="absolute top-full left-0 mt-1.5 w-52 bg-white border border-zinc-200 rounded-md shadow-md p-2.5 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-20 pointer-events-none"
-                >
-                  <p
-                    class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5"
-                  >
+                <!-- <div
+                  class="absolute top-full left-0 mt-1.5 w-52 bg-white border border-zinc-200 rounded-md shadow-md p-2.5 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-20 pointer-events-none">
+                  <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
                     Environment Status
                   </p>
                   <ul class="space-y-1">
-                    <li
-                      v-for="(detail, idx) in project.env_details"
-                      :key="idx"
-                      class="flex items-center gap-2 text-[11px]"
-                    >
-                      <component
-                        :is="getEnvIcon(detail)"
-                        :class="`w-3 h-3 ${detail.toLowerCase().includes('missing') || detail.toLowerCase().includes('not found') ? 'text-rose-500' : 'text-emerald-500'}`"
-                      />
-                      <span
-                        :class="
-                          detail.toLowerCase().includes('missing') ||
-                          detail.toLowerCase().includes('not found')
-                            ? 'text-rose-700'
-                            : 'text-slate-700'
-                        "
-                      >
+                    <li v-for="(detail, idx) in project.env_details" :key="idx"
+                      class="flex items-center gap-2 text-[11px]">
+                      <component :is="getEnvIcon(detail)"
+                        :class="`w-3 h-3 ${detail.toLowerCase().includes('missing') || detail.toLowerCase().includes('not found') ? 'text-rose-500' : 'text-emerald-500'}`" />
+                      <span :class="detail.toLowerCase().includes('missing') ||
+                        detail.toLowerCase().includes('not found')
+                        ? 'text-rose-700'
+                        : 'text-slate-700'
+                        ">
                         {{ detail }}
                       </span>
                     </li>
                   </ul>
-                </div>
+                </div> -->
               </div>
 
               <!-- Test Result -->
               <div class="flex items-center gap-2">
-                <span class="text-[11px] font-mono text-emerald-600"
-                  >{{ project.tests_passed }} passed</span
-                >
+                <span class="text-[11px] font-mono text-emerald-600">{{ project.tests_passed }} passed</span>
                 <span class="text-slate-300">·</span>
-                <span class="text-[11px] font-mono text-rose-600"
-                  >{{ project.tests_failed }} failed</span
-                >
+                <span class="text-[11px] font-mono text-rose-600">{{ project.tests_failed }} failed</span>
               </div>
 
               <!-- Coverage -->
               <div class="flex items-center gap-2">
                 <div class="flex-1 bg-slate-100 rounded-full h-1.5">
-                  <div
-                    :class="`h-1.5 rounded-full ${project.coverage < 80 ? 'bg-amber-500' : 'bg-emerald-500'}`"
-                    :style="{ width: `${project.coverage}%` }"
-                  ></div>
+                  <div :class="`h-1.5 rounded-full ${project.coverage < 80 ? 'bg-amber-500' : 'bg-emerald-500'}`"
+                    :style="{ width: `${project.coverage}%` }"></div>
                 </div>
-                <span
-                  class="text-[11px] font-mono text-slate-600 w-10 text-right"
-                  >{{ project.coverage }}%</span
-                >
+                <span class="text-[11px] font-mono text-slate-600 w-10 text-right">{{ project.coverage }}%</span>
               </div>
 
               <!-- Last Run -->
@@ -408,8 +350,7 @@ const goToProject = (id: string) => router.push(`/projects/${id}/execute`);
 
       <!-- BOTTOM STATUS BAR -->
       <div
-        class="h-7 px-4 flex items-center justify-between border-t border-zinc-200/80 bg-white text-[10px] text-slate-500"
-      >
+        class="h-7 px-4 flex items-center justify-between border-t border-zinc-200/80 bg-white text-[10px] text-slate-500">
         <div class="flex items-center gap-4">
           <div class="flex items-center gap-1.5">
             <Terminal class="w-3 h-3" />

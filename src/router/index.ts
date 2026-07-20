@@ -1,7 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 
 const router = createRouter({
-  // Tauri v2 桌面应用使用 history 模式即可（无服务端路由问题）
   history: createWebHistory(),
   routes: [
     {

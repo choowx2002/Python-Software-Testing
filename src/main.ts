@@ -1,27 +1,24 @@
-// src/main.ts
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import router from './router'
 import App from './App.vue'
-import { initializeDatabase } from './utils/db'
+import router from './router'
+import { initializeDatabase } from './utils/db' // 确保路径正确
 
 import './assets/main.css'
 
-// 在应用启动前初始化数据库
 async function bootstrap() {
   try {
-    console.log('[App] Initializing database...')
     await initializeDatabase()
-    console.log('[App] Database ready, starting application...')
-  } catch (error) {
-    console.error('[App] Failed to initialize database:', error)
-    // 可以选择显示错误提示或继续启动（表可能已存在）
-  }
+    console.log('[Main] ✅ Database initialized successfully')
 
-  const app = createApp(App)
-  app.use(createPinia())
-  app.use(router)
-  app.mount('#app')
+    const app = createApp(App)
+    app.use(createPinia())
+    app.use(router)
+    app.mount('#app')
+  } catch (error) {
+    console.error('[Main] ❌ Fatal: Failed to initialize database', error)
+    document.body.innerHTML = '<h1 style="color:red; padding:20px;">Database Initialization Failed. Check Console.</h1>'
+  }
 }
 
 bootstrap()
