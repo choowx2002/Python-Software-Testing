@@ -89,7 +89,7 @@ onMounted(() => {
 
 // 路由跳转
 const goToImport = () => router.push("/projects/import");
-const goToProject = (id: number) => router.push(`/projects/${id}/execute`);
+const goToProject = (id: number) => router.push(`/projects/${id}`);
 
 const handleDelete = async (projectId: number, projectName: string) => {
   const deleteConfirm = await ask(`Are you sure you want to delete "${projectName}"? This will remove all associated test history.`)

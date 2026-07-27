@@ -18,28 +18,35 @@ const router = createRouter({
       name: "DatabaseSchema",
       component: () => import("@/components/DatabaseSchemaViewer.vue"),
     },
-    // {
-    //   path: '/projects/:id',
-    //   name: 'ProjectContext',
-    //   component: () => import('@/views/projects/[id]/Layout.vue'),
-    //   children: [
-    //     {
-    //       path: 'execute',
-    //       name: 'ProjectExecute',
-    //       component: () => import('@/views/projects/[id]/Execute.vue'),
-    //     },
-    //     {
-    //       path: 'generate',
-    //       name: 'ProjectGenerate',
-    //       component: () => import('@/views/projects/[id]/Generate.vue'),
-    //     },
-    //     {
-    //       path: 'coverage',
-    //       name: 'ProjectCoverage',
-    //       component: () => import('@/views/projects/[id]/Coverage.vue'),
-    //     },
-    //   ],
-    // },
+    {
+      path: "/projects/:id",
+      name: "ProjectContext",
+      component: () => import("@/views/projects/Layout.vue"),
+      children: [
+        {
+          path: "",
+          redirect: (to) => ({
+            name: "ProjectExecute",
+            params: { id: to.params.id },
+          }),
+        },
+        {
+          path: "execute",
+          name: "ProjectExecute",
+          component: () => import("@/views/projects/[id]/Execute.vue"),
+        },
+        {
+          path: "generate",
+          name: "ProjectGenerate",
+          component: () => import("@/views/projects/[id]/Generate.vue"),
+        },
+        {
+          path: "coverage",
+          name: "ProjectCoverage",
+          component: () => import("@/views/projects/[id]/Coverage.vue"),
+        },
+      ],
+    },
   ],
 });
 

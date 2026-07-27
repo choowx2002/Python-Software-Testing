@@ -16,6 +16,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            commands::scan_test_files,
+            commands::collect_test_cases,
             commands::detect_python_env,
             commands::install_dependencies,
             commands::validate_project_directory,

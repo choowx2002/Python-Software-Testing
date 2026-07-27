@@ -24,7 +24,7 @@ importers:
         specifier: ~2.5.1
         version: 2.5.1
       '@tauri-apps/plugin-opener':
-        specifier: ^2
+        specifier: ^2.5.4
         version: 2.5.4
       '@tauri-apps/plugin-shell':
         specifier: ~2.3.5

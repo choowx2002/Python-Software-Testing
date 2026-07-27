@@ -1,6 +1,6 @@
 // src-tauri/src/commands.rs
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::Emitter;
 
@@ -13,9 +13,9 @@ pub struct EnvDetectionResult {
     pub python_path: Option<String>,
     pub python_version: Option<String>,
     pub venv_path: Option<String>,
-    // 重命名: venv_activated -> venv_exists 
+    // 重命名: venv_activated -> venv_exists
     // 语义更准确：表示 Tauri 找到了可用的 venv 目录，可直接调用其 python，无需 shell activate
-    pub venv_exists: bool, 
+    pub venv_exists: bool,
     pub dependencies: Vec<DependencyStatus>,
 }
 
@@ -39,10 +39,28 @@ pub struct InstallResult {
     pub failed: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Clone)] 
+#[derive(Debug, Serialize, Clone)]
 pub struct InstallStep {
     pub package: String,
     pub status: String, // "starting", "success", "failed"
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestFile {
+    pub name: String,
+    pub path: String,
+    pub relative_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestCase {
+    pub id: String,
+    pub name: String,
+    pub file: String,
+    pub class_name: Option<String>,
+    pub line: Option<u32>,
 }
 
 // ============================================
@@ -94,7 +112,7 @@ pub async fn detect_python_env(project_path: String) -> Result<EnvDetectionResul
     // ----------------------------------------
     if !result.venv_exists {
         let global_python = if cfg!(target_os = "windows") { "python" } else { "python3" };
-        
+
         if let Ok(output) = Command::new(global_python).arg("--version").output() {
             if output.status.success() {
                 let version = if output.stdout.is_empty() {
@@ -129,11 +147,11 @@ pub async fn detect_python_env(project_path: String) -> Result<EnvDetectionResul
     // ----------------------------------------
     // 4. Dependency Detection (requirements.txt vs venv)
     // ----------------------------------------
-    
+
     // 4.1 尝试从 requirements.txt 读取项目声明的依赖
     let mut required_deps: Vec<String> = Vec::new();
     let req_file_path = path.join("requirements.txt");
-    
+
     if req_file_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&req_file_path) {
             for line in content.lines() {
@@ -150,7 +168,7 @@ pub async fn detect_python_env(project_path: String) -> Result<EnvDetectionResul
                     .unwrap_or(line)
                     .trim()
                     .to_lowercase();
-                
+
                 if !pkg_name.is_empty() {
                     required_deps.push(pkg_name);
                 }
@@ -242,7 +260,7 @@ pub async fn install_dependencies(
 
         if output.status.success() {
             installed.push(package.clone());
-            
+
             // 2️⃣ Emit: 安装成功
             let _ = app.emit("install_step", InstallStep {
                 package: package.clone(),
@@ -250,7 +268,7 @@ pub async fn install_dependencies(
             });
         } else {
             failed.push(package.clone());
-            
+
             // 3️⃣ Emit: 安装失败
             let _ = app.emit("install_step", InstallStep {
                 package: package.clone(),
@@ -272,14 +290,14 @@ pub async fn install_dependencies(
 #[tauri::command]
 pub async fn validate_project_directory(project_path: String) -> Result<bool, String> {
     let path = PathBuf::from(&project_path);
-    
+
     if !path.exists() {
         return Err("Directory does not exist".to_string());
     }
     if !path.is_dir() {
         return Err("Path is not a directory".to_string());
     }
-    
+
     // 放宽校验：检查 .py 文件或常见的 Python 项目配置文件
     let has_python_indicators = std::fs::read_dir(&path)
         .map_err(|e| format!("Failed to read directory: {}", e))?
@@ -293,11 +311,11 @@ pub async fn validate_project_directory(project_path: String) -> Result<bool, St
             name_str.eq_ignore_ascii_case("setup.py") ||
             name_str.eq_ignore_ascii_case("Pipfile")
         });
-    
+
     if !has_python_indicators {
         return Err("No Python files (.py) or common project configuration files (requirements.txt, pyproject.toml, etc.) found in the selected directory".to_string());
     }
-    
+
     Ok(true)
 }
 
@@ -319,7 +337,7 @@ pub async fn create_virtual_env(
         } else {
             venv_dir.join("bin").join("python")
         };
-        
+
         if test_python.exists() {
             if let Ok(output) = Command::new(&test_python).arg("--version").output() {
                 if output.status.success() {
@@ -344,4 +362,230 @@ pub async fn create_virtual_env(
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
+}
+
+#[tauri::command]
+pub fn scan_test_files(project_path: String) -> Result<Vec<TestFile>, String> {
+    let project = PathBuf::from(&project_path);
+
+    if !project.exists() {
+        return Err(format!("Project path does not exist: {}", project_path));
+    }
+
+    if !project.is_dir() {
+        return Err(format!("Project path is not a directory: {}", project_path));
+    }
+
+    let tests_dir = project.join("tests");
+
+    if !tests_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut files = Vec::new();
+
+    scan_test_directory(&tests_dir, &project, &mut files)?;
+
+    files.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+
+    Ok(files)
+}
+
+fn scan_test_directory(
+    directory: &Path,
+    project_root: &Path,
+    files: &mut Vec<TestFile>,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(directory)
+        .map_err(|e| format!("Failed to read directory {:?}: {}", directory, e))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            scan_test_directory(&path, project_root, files)?;
+            continue;
+        }
+
+        if !path.is_file() {
+            continue;
+        }
+
+        let Some(file_name) = path.file_name().and_then(|v| v.to_str()) else {
+            continue;
+        };
+
+        if !is_test_file(file_name) {
+            continue;
+        }
+
+        let relative_path = path
+            .strip_prefix(project_root)
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        files.push(TestFile {
+            name: file_name.to_string(),
+            path: path.to_string_lossy().to_string(),
+            relative_path,
+        });
+    }
+
+    Ok(())
+}
+
+fn is_test_file(file_name: &str) -> bool {
+    file_name.starts_with("test_") && file_name.ends_with(".py")
+        || file_name.ends_with("_test.py")
+}
+
+#[tauri::command]
+pub fn collect_test_cases(project_path: String) -> Result<Vec<TestCase>, String> {
+    let project = PathBuf::from(&project_path);
+
+    if !project.exists() {
+        return Err(format!(
+            "Project path does not exist: {}",
+            project_path
+        ));
+    }
+
+    if !project.is_dir() {
+        return Err(format!(
+            "Project path is not a directory: {}",
+            project_path
+        ));
+    }
+
+    let python = find_project_python(&project)?;
+
+    let output = Command::new(&python)
+        .current_dir(&project)
+        .args([
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+        ])
+        .output()
+        .map_err(|error| {
+            format!(
+                "Failed to start pytest using {:?}: {}",
+                python, error
+            )
+        })?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !output.status.success() {
+        return Err(format!(
+            "pytest collection failed.\n\n{}{}",
+            stdout,
+            stderr
+        ));
+    }
+
+    parse_pytest_collection(&stdout, &project)
+}
+
+fn find_project_python(project: &Path) -> Result<PathBuf, String> {
+    let candidates = if cfg!(target_os = "windows") {
+        vec![
+            project.join(".venv").join("Scripts").join("python.exe"),
+            project.join("venv").join("Scripts").join("python.exe"),
+        ]
+    } else {
+        vec![
+            project.join(".venv").join("bin").join("python"),
+            project.join("venv").join("bin").join("python"),
+        ]
+    };
+
+    for python in candidates {
+        if python.is_file() {
+            return Ok(python);
+        }
+    }
+
+    Err(format!(
+        "No project Python interpreter found in {}. \
+Expected .venv or venv.",
+        project.display()
+    ))
+}
+
+fn parse_pytest_collection(
+    stdout: &str,
+    project: &Path,
+) -> Result<Vec<TestCase>, String> {
+    let mut cases = Vec::new();
+
+    for raw_line in stdout.lines() {
+        let line = raw_line.trim();
+
+        if line.is_empty() {
+            continue;
+        }
+
+        // pytest -q collection output usually looks like:
+        //
+        // tests/test_user.py::test_create_user
+        // tests/test_user.py::TestUser::test_update_user
+        //
+        // Ignore summary / warnings / collection messages.
+        if !line.contains("::") {
+            continue;
+        }
+
+        let id = line.to_string();
+
+        let parts: Vec<&str> = line.split("::").collect();
+
+        if parts.len() < 2 {
+            continue;
+        }
+
+        let relative_file = parts[0];
+
+        let file_path = project.join(relative_file);
+
+        let file = normalize_relative_path(
+            &file_path,
+            project,
+        )?;
+
+        let test_name = parts.last().unwrap().to_string();
+
+        let class_name = if parts.len() >= 3 {
+            Some(parts[parts.len() - 2].to_string())
+        } else {
+            None
+        };
+
+        cases.push(TestCase {
+            id,
+            name: test_name,
+            file,
+            class_name,
+            line: None,
+        });
+    }
+
+    Ok(cases)
+}
+
+fn normalize_relative_path(
+    path: &Path,
+    project: &Path,
+) -> Result<String, String> {
+    let relative = path
+        .strip_prefix(project)
+        .map_err(|error| error.to_string())?;
+
+    Ok(relative
+        .to_string_lossy()
+        .replace('\\', "/"))
 }
