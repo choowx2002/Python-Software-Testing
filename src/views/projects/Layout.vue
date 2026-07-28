@@ -18,6 +18,7 @@ import {
   Settings2,
 } from '@lucide/vue'
 import { useProjectStore, type Project } from '../../stores/projectStore'
+import { invoke } from '@tauri-apps/api/core'
 
 type ProjectRouteName = 'ProjectExecute' | 'ProjectGenerate' | 'ProjectCoverage'
 
@@ -116,12 +117,13 @@ function goToSection(name: ProjectRouteName) {
 }
 
 async function openProjectFolder() {
-  if (!currentProject.value?.path) return
+  const projectPath = currentProject.value?.path;
+  if (!projectPath) return;
+
   try {
-    await openPath(currentProject.value.path)
+    await invoke("open_in_file_manager", { path: projectPath });
   } catch (error) {
-    console.error('[ProjectLayout] openProjectFolder failed:', error)
-    localError.value = '无法打开项目目录'
+    console.error("[ProjectLayout] openProjectFolder failed:", error);
   }
 }
 

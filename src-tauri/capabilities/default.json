@@ -18,6 +18,14 @@
         "sql:allow-execute",
         "sql:allow-load",
         "sql:allow-select",
-        "core:window:allow-start-dragging"
+        "core:window:allow-start-dragging",
+        {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        {
+          "path": "/**"
+        }
+      ]
+    }
     ]
 }

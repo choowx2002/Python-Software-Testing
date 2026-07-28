@@ -1,21 +1,20 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { computed, ref, watch } from "vue";
+import { onUnmounted, computed, ref, watch, onMounted } from "vue";
 import { useRoute } from "vue-router";
 import {
   Play,
   Square,
   RefreshCw,
-  Terminal,
   CheckCircle2,
   XCircle,
   Clock3,
   AlertCircle,
   ChevronDown,
   ChevronRight,
-  FileCode2,
 } from "@lucide/vue";
 import { useProjectStore } from "../../../stores/projectStore";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 const route = useRoute();
 const projectStore = useProjectStore();
@@ -27,7 +26,9 @@ const testMode = ref<"all" | "file" | "test">("all");
 const showAdvanced = ref(false);
 
 const commandOutput = ref<string[]>([]);
-const executionStatus = ref<"idle" | "running" | "passed" | "failed">("idle");
+const executionStatus = ref<"idle" | "running" | "completed" | "failed">(
+  "idle",
+);
 
 const statistics = ref({
   total: 0,
@@ -55,6 +56,193 @@ interface TestCase {
   line: number | null;
 }
 
+interface TestOutputEvent {
+  runId: string;
+  stream: "stdout" | "stderr";
+  line: string;
+}
+
+interface TestResult {
+  id: string;
+  name: string;
+  file: string;
+  status: "passed" | "failed" | "skipped" | "error";
+  duration: number;
+  errorMessage: string | null;
+}
+
+interface TestStartedEvent {
+  runId: string;
+  total: number;
+}
+
+interface TestFinishedEvent {
+  runId: string;
+  success: boolean;
+  exitCode: number | null;
+  duration: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  results: TestResult[];
+}
+
+const currentRunId = ref<string | null>(null);
+
+const totalTests = ref(0);
+const completedTests = ref(0);
+
+const passedTests = ref(0);
+const failedTests = ref(0);
+const skippedTests = ref(0);
+
+const currentTest = ref<string | null>(null);
+
+const executionDuration = ref(0);
+
+const testResults = ref<TestResult[]>([]);
+
+const pytestOutput = ref<TestOutputEvent[]>([]);
+
+const showPytestOutput = ref(false);
+const pytestArguments = ref("");
+
+let unlistenStarted: UnlistenFn | undefined;
+let unlistenOutput: UnlistenFn | undefined;
+let unlistenFinished: UnlistenFn | undefined;
+async function setupTestListeners() {
+  unlistenStarted = await listen<TestStartedEvent>("test-started", (event) => {
+    currentRunId.value = event.payload.runId;
+
+    totalTests.value = event.payload.total;
+    completedTests.value = 0;
+
+    passedTests.value = 0;
+    failedTests.value = 0;
+    skippedTests.value = 0;
+
+    executionStatus.value = "running";
+    isRunning.value = true;
+
+    testResults.value = [];
+    pytestOutput.value = [];
+  });
+
+  unlistenOutput = await listen<TestOutputEvent>("test-output", (event) => {
+    if (event.payload.runId !== currentRunId.value) {
+      return;
+    }
+
+    pytestOutput.value.push(event.payload);
+
+    parseRealtimeProgress(event.payload.line);
+  });
+
+  unlistenFinished = await listen<TestFinishedEvent>(
+    "test-finished",
+    (event) => {
+      if (event.payload.runId !== currentRunId.value) {
+        return;
+      }
+
+      isRunning.value = false;
+
+      executionStatus.value = event.payload.success ? "completed" : "failed";
+
+      executionDuration.value = event.payload.duration;
+
+      passedTests.value = event.payload.passed;
+      failedTests.value = event.payload.failed;
+      skippedTests.value = event.payload.skipped;
+
+      testResults.value = event.payload.results;
+
+      completedTests.value = event.payload.results.length;
+
+      currentTest.value = null;
+    },
+  );
+}
+
+function parseRealtimeProgress(line: string) {
+  const match = line.match(/^(.+?)::(.+?)\s+(PASSED|FAILED|SKIPPED|ERROR)/);
+  console.log("line", line);
+  if (!match) return;
+
+  const [, file, name, status] = match;
+
+  currentTest.value = `${file}::${name}`;
+  console.log("line22", currentTest.value, status);
+  if (status === "PASSED") {
+    passedTests.value++;
+    console.log("passedTests",passedTests.value)
+  }
+
+  if (status === "FAILED" || status === "ERROR") {
+    failedTests.value++;
+  }
+
+  if (status === "SKIPPED") {
+    skippedTests.value++;
+  }
+
+  completedTests.value =
+    passedTests.value + failedTests.value + skippedTests.value;
+}
+
+async function runTests() {
+  if (isRunning.value) return;
+
+  const projectPath = currentProject.value?.path;
+  const interpreterPath = currentProject.value?.interpreter_path;
+
+  if (!projectPath) {
+    console.error("Project path is missing");
+    return;
+  }
+
+  if (!interpreterPath) {
+    console.error("Python interpreter is missing");
+    return;
+  }
+
+  const args = pytestArguments.value
+    .split(/\s+/)
+    .filter((arg) => arg.length > 0);
+
+  try {
+    console.log(
+      "123",
+      projectPath,
+      interpreterPath,
+      selectedTestCases.value,
+      args,
+    );
+
+    await invoke<string>("run_tests", {
+      projectPath,
+      interpreterPath,
+      testCases: selectedTestCases.value,
+      pytestArgs: args,
+    });
+  } catch (error) {
+    console.error("[Execute] Failed to run tests:", error);
+
+    isRunning.value = false;
+    executionStatus.value = "failed";
+  }
+}
+const progress = computed(() => {
+  if (totalTests.value <= 0) {
+    return 0;
+  }
+
+  return Math.min(
+    100,
+    Math.round((completedTests.value / totalTests.value) * 100),
+  );
+});
+const selectedTestCases = ref<string[]>([]);
 const testCases = ref<TestCase[]>([]);
 const isCollecting = ref(false);
 const collectError = ref<string | null>(null);
@@ -71,6 +259,7 @@ watch(
     if (!project) return;
 
     collectTestCases();
+    scanTestFiles();
   },
   {
     immediate: true,
@@ -81,7 +270,7 @@ const statusText = computed(() => {
   switch (executionStatus.value) {
     case "running":
       return "Running";
-    case "passed":
+    case "completed":
       return "Passed";
     case "failed":
       return "Failed";
@@ -94,7 +283,7 @@ const statusIcon = computed(() => {
   switch (executionStatus.value) {
     case "running":
       return Clock3;
-    case "passed":
+    case "completed":
       return CheckCircle2;
     case "failed":
       return XCircle;
@@ -107,7 +296,7 @@ const statusClass = computed(() => {
   switch (executionStatus.value) {
     case "running":
       return "bg-blue-50 text-blue-700 border-blue-200";
-    case "passed":
+    case "completed":
       return "bg-emerald-50 text-emerald-700 border-emerald-200";
     case "failed":
       return "bg-rose-50 text-rose-700 border-rose-200";
@@ -116,60 +305,15 @@ const statusClass = computed(() => {
   }
 });
 
-async function runTests() {
-  if (isRunning.value) return;
+onMounted(() => {
+  setupTestListeners();
+});
 
-  isRunning.value = true;
-  executionStatus.value = "running";
-  commandOutput.value = [];
-  statistics.value = {
-    total: 0,
-    passed: 0,
-    failed: 0,
-    skipped: 0,
-    duration: 0,
-  };
-
-  commandOutput.value.push(
-    `Project ID: ${projectId.value}`,
-    "Preparing test environment...",
-    "Starting pytest...",
-    "",
-  );
-
-  // TODO:
-  // 后续这里接 Tauri Rust command
-  //
-  // await invoke('run_tests', {
-  //   projectId: projectId.value,
-  //   mode: testMode.value,
-  //   path: selectedTestPath.value,
-  // })
-
-  await new Promise((resolve) => setTimeout(resolve, 1200));
-
-  commandOutput.value.push(
-    "============================= test session starts =============================",
-    "collected 35 items",
-    "",
-    "tests/test_example.py ............",
-    "tests/test_utils.py ........",
-    "tests/test_parser.py ...............",
-    "",
-    "============================== 35 passed in 1.24s ==============================",
-  );
-
-  statistics.value = {
-    total: 35,
-    passed: 35,
-    failed: 0,
-    skipped: 0,
-    duration: 1.24,
-  };
-
-  executionStatus.value = "passed";
-  isRunning.value = false;
-}
+onUnmounted(() => {
+  unlistenStarted?.();
+  unlistenOutput?.();
+  unlistenFinished?.();
+});
 
 function stopTests() {
   if (!isRunning.value) return;
@@ -385,6 +529,7 @@ async function collectTestCases() {
                 Pytest Arguments
               </label>
               <input
+                v-model="pytestArguments"
                 type="text"
                 placeholder="-v --tb=short"
                 class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
@@ -474,41 +619,163 @@ async function collectTestCases() {
     </section>
 
     <!-- Output -->
-    <section
-      class="min-h-80 flex-1 overflow-hidden rounded-2xl border border-slate-200 bg-slate-950"
-    >
+    <section class="rounded-2xl border border-slate-200 bg-white">
       <div
-        class="flex items-center justify-between border-b border-slate-800 px-4 py-3"
+        class="flex items-center justify-between border-b border-slate-200 px-5 py-4"
       >
-        <div class="flex items-center gap-2">
-          <Terminal class="h-4 w-4 text-slate-400" />
-          <span class="text-xs font-medium text-slate-300"> Test Output </span>
+        <div>
+          <h2 class="text-sm font-semibold text-slate-900">Test Execution</h2>
+
+          <p class="mt-1 text-xs text-slate-500">
+            Run pytest against the selected test cases
+          </p>
         </div>
 
-        <span class="font-mono text-[10px] text-slate-500"> pytest </span>
+        <button
+          type="button"
+          :disabled="isRunning"
+          @click="runTests"
+          class="rounded-xl bg-slate-900 px-4 py-2 text-xs font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {{ isRunning ? "Running..." : "Run Tests" }}
+        </button>
       </div>
 
-      <div class="h-75 overflow-auto p-4 font-mono text-xs leading-6">
-        <div v-if="commandOutput.length === 0" class="text-slate-600">
-          No test execution yet.
+      <div class="p-5">
+        <!-- Idle -->
+        <div v-if="executionStatus === 'idle'" class="py-8 text-center">
+          <div class="text-sm font-medium text-slate-700">Ready to run</div>
+
+          <div class="mt-1 text-xs text-slate-500">
+            {{ selectedTestCases.length }} test cases selected
+          </div>
         </div>
 
-        <template v-else>
-          <div
-            v-for="(line, index) in commandOutput"
-            :key="index"
-            class="whitespace-pre-wrap"
-            :class="
-              line.includes('passed')
-                ? 'text-emerald-400'
-                : line.includes('failed')
-                  ? 'text-rose-400'
-                  : 'text-slate-300'
-            "
-          >
-            {{ line || " " }}
+        <!-- Running / Finished -->
+        <div v-else>
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-sm font-semibold text-slate-900">
+                {{
+                  executionStatus === "running"
+                    ? "Running"
+                    : executionStatus === "completed"
+                      ? "Completed"
+                      : "Failed"
+                }}
+              </div>
+
+              <div class="mt-1 text-xs text-slate-500">
+                {{ completedTests }} / {{ totalTests }}
+              </div>
+            </div>
+
+            <div class="text-2xl font-semibold text-slate-900">
+              {{ progress }}%
+            </div>
           </div>
-        </template>
+
+          <div class="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
+            <div
+              class="h-full rounded-full bg-emerald-500 transition-all duration-300"
+              :style="{ width: `${progress}%` }"
+            />
+          </div>
+
+          <div class="mt-5 grid grid-cols-3 gap-3">
+            <div class="rounded-xl bg-emerald-50 p-3">
+              <div class="text-xs text-emerald-600">Passed</div>
+
+              <div class="mt-1 text-lg font-semibold text-emerald-700">
+                {{ passedTests }}
+              </div>
+            </div>
+
+            <div class="rounded-xl bg-rose-50 p-3">
+              <div class="text-xs text-rose-600">Failed</div>
+
+              <div class="mt-1 text-lg font-semibold text-rose-700">
+                {{ failedTests }}
+              </div>
+            </div>
+
+            <div class="rounded-xl bg-slate-100 p-3">
+              <div class="text-xs text-slate-600">Skipped</div>
+
+              <div class="mt-1 text-lg font-semibold text-slate-700">
+                {{ skippedTests }}
+              </div>
+            </div>
+          </div>
+
+          <!-- Current test -->
+          <div
+            v-if="isRunning && currentTest"
+            class="mt-5 rounded-xl border border-slate-200 px-4 py-3"
+          >
+            <div
+              class="text-[11px] font-medium uppercase tracking-wide text-slate-400"
+            >
+              Current Test
+            </div>
+
+            <div class="mt-1 truncate font-mono text-xs text-slate-700">
+              {{ currentTest }}
+            </div>
+          </div>
+
+          <!-- Duration -->
+          <div v-if="!isRunning" class="mt-5 text-xs text-slate-500">
+            Duration:
+            <span class="font-medium text-slate-700">
+              {{ executionDuration.toFixed(2) }}s
+            </span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section
+      v-if="pytestOutput.length > 0"
+      class="rounded-2xl border border-slate-200 bg-white"
+    >
+      <button
+        type="button"
+        class="flex w-full items-center justify-between px-5 py-4 text-left"
+        @click="showPytestOutput = !showPytestOutput"
+      >
+        <div>
+          <div class="text-sm font-medium text-slate-800">Pytest Output</div>
+
+          <div class="mt-1 text-xs text-slate-500">
+            {{ pytestOutput.length }} log lines
+          </div>
+        </div>
+
+        <ChevronDown
+          class="h-4 w-4 text-slate-400 transition-transform"
+          :class="{
+            'rotate-180': showPytestOutput,
+          }"
+        />
+      </button>
+
+      <div
+        v-if="showPytestOutput"
+        class="border-t border-slate-200 bg-slate-950 p-4"
+      >
+        <pre
+          class="max-h-125 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-xs leading-5"
+        ><span
+      v-for="(output, index) in pytestOutput"
+      :key="index"
+      :class="
+        output.stream === 'stderr'
+          ? 'text-rose-300'
+          : 'text-slate-300'
+      "
+    >{{ output.line }}
+{{ '\n' }}</span></pre>
       </div>
     </section>
 

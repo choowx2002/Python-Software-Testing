@@ -1,8 +1,12 @@
-// src-tauri/src/commands.rs
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tokio::process::Command as AsyncCommand;
+use std::process::Stdio;
+use tauri::AppHandle;
 use tauri::Emitter;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use uuid::Uuid;
 
 // ============================================
 // Data Structures
@@ -588,4 +592,392 @@ fn normalize_relative_path(
     Ok(relative
         .to_string_lossy()
         .replace('\\', "/"))
+}
+
+
+// TEST DELCARE
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestOutputEvent {
+    pub run_id: String,
+    pub stream: String,
+    pub line: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestStartedEvent {
+    pub run_id: String,
+    pub total: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestProgressEvent {
+    pub run_id: String,
+    pub completed: usize,
+    pub total: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub skipped: usize,
+    pub current_test: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestResult {
+    pub id: String,
+    pub name: String,
+    pub file: String,
+    pub status: String,
+    pub duration: f64,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestFinishedEvent {
+    pub run_id: String,
+    pub success: bool,
+    pub exit_code: Option<i32>,
+    pub duration: f64,
+    pub passed: usize,
+    pub failed: usize,
+    pub skipped: usize,
+    pub results: Vec<TestResult>,
+}
+
+#[tauri::command]
+pub async fn run_tests(
+    app_handle: AppHandle,
+    project_path: String,
+    interpreter_path: String,
+    test_cases: Vec<String>,
+    pytest_args: Vec<String>,
+) -> Result<String, String> {
+    let run_id = Uuid::new_v4().to_string();
+    let project = PathBuf::from(&project_path);
+
+    if !project.exists() {
+        return Err(format!("Project path does not exist: {}", project_path));
+    }
+    if !project.is_dir() {
+        return Err(format!("Project path is not a directory: {}", project_path));
+    }
+
+    let interpreter = PathBuf::from(&interpreter_path);
+    if !interpreter.exists() {
+        return Err(format!(
+            "Python interpreter does not exist: {}",
+            interpreter_path
+        ));
+    }
+
+    let total = test_cases.len();
+
+    let _ = app_handle.emit(
+        "test-started",
+        TestStartedEvent {
+            run_id: run_id.clone(),
+            total,
+        },
+    );
+
+    let junit_path =
+        std::env::temp_dir().join(format!("pytest-{}.xml", run_id));
+
+    let mut args = vec![
+        "-m".to_string(),
+        "pytest".to_string(),
+        "-v".to_string(),
+    ];
+    args.extend(pytest_args);
+    if !test_cases.is_empty() {
+        args.extend(test_cases);
+    }
+    args.push(format!("--junitxml={}", junit_path.to_string_lossy()));
+
+    let start = std::time::Instant::now();
+
+    // ✅ 使用 AsyncCommand（tokio::process::Command）
+    let mut child = AsyncCommand::new(&interpreter)
+        .current_dir(&project)
+        .args(&args)
+        .stdout(Stdio::piped())   // ✅ tokio::process::Stdio
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Failed to start pytest: {}", e))?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to capture pytest stdout".to_string())?;
+
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to capture pytest stderr".to_string())?;
+
+    // --- stdout 逐行读取 ---
+    let stdout_handle = app_handle.clone();
+    let stdout_run_id = run_id.clone();
+
+    let stdout_task = tokio::spawn(async move {
+        let reader = BufReader::new(stdout); // ✅ 现在是 tokio ChildStdout，满足 AsyncRead
+        let mut lines = reader.lines();
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = stdout_handle.emit(
+                "test-output",
+                TestOutputEvent {
+                    run_id: stdout_run_id.clone(),
+                    stream: "stdout".to_string(),
+                    line,
+                },
+            );
+        }
+    });
+
+    // --- stderr 逐行读取 ---
+    let stderr_handle = app_handle.clone();
+    let stderr_run_id = run_id.clone();
+
+    let stderr_task = tokio::spawn(async move {
+        let reader = BufReader::new(stderr); // ✅ 同上
+        let mut lines = reader.lines();
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = stderr_handle.emit(
+                "test-output",
+                TestOutputEvent {
+                    run_id: stderr_run_id.clone(),
+                    stream: "stderr".to_string(),
+                    line,
+                },
+            );
+        }
+    });
+
+    // ✅ tokio Child::wait() 是 async，可以 .await
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| format!("Failed waiting for pytest: {}", e))?;
+
+    let _ = stdout_task.await;
+    let _ = stderr_task.await;
+
+    let duration = start.elapsed().as_secs_f64();
+    let results = parse_junit_results(&junit_path)?;
+
+    let passed = results.iter().filter(|r| r.status == "passed").count();
+    let failed = results.iter().filter(|r| r.status == "failed").count();
+    let skipped = results.iter().filter(|r| r.status == "skipped").count();
+
+    let _ = app_handle.emit(
+        "test-finished",
+        TestFinishedEvent {
+            run_id: run_id.clone(),
+            success: status.success(),
+            exit_code: status.code(),
+            duration,
+            passed,
+            failed,
+            skipped,
+            results,
+        },
+    );
+
+    let _ = std::fs::remove_file(junit_path);
+
+    Ok(run_id)
+}
+
+fn parse_junit_results(path: &Path) -> Result<Vec<TestResult>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read JUnit XML: {}", e))?;
+
+    let mut reader = quick_xml::Reader::from_str(&content);
+    reader.config_mut().trim_text(true);
+
+    let mut results = Vec::new();
+    let mut current: Option<TestResult> = None;
+    let mut current_failure: Option<String> = None;
+
+    loop {
+        match reader.read_event() {
+            // ---- 自闭合: <testcase ... /> → 一定是 passed ----
+            Ok(quick_xml::events::Event::Empty(ref event))
+                if event.name().as_ref() == b"testcase" =>
+            {
+                let test = parse_testcase_attributes(event);
+                results.push(test); // ✅ 直接入结果，无需等 End
+            }
+
+            // ---- 非自闭合: <testcase ...> → 可能有 failure/error/skipped ----
+            Ok(quick_xml::events::Event::Start(ref event))
+                if event.name().as_ref() == b"testcase" =>
+            {
+                current = Some(parse_testcase_attributes(event));
+            }
+
+            Ok(quick_xml::events::Event::Start(ref event))
+                if event.name().as_ref() == b"failure" =>
+            {
+                if let Some(test) = current.as_mut() {
+                    test.status = "failed".to_string();
+                }
+                current_failure = Some(String::new());
+            }
+
+            Ok(quick_xml::events::Event::Start(ref event))
+                if event.name().as_ref() == b"error" =>
+            {
+                if let Some(test) = current.as_mut() {
+                    test.status = "error".to_string();
+                }
+                current_failure = Some(String::new());
+            }
+
+            Ok(quick_xml::events::Event::Start(ref event))
+                if event.name().as_ref() == b"skipped" =>
+            {
+                if let Some(test) = current.as_mut() {
+                    test.status = "skipped".to_string();
+                }
+            }
+
+            Ok(quick_xml::events::Event::Text(text)) => {
+                if let Some(message) = current_failure.as_mut() {
+                    let value = text
+                        .unescape()
+                        .map_err(|e| e.to_string())?;
+                    message.push_str(&value);
+                }
+            }
+
+            Ok(quick_xml::events::Event::End(ref event))
+                if event.name().as_ref() == b"failure"
+                    || event.name().as_ref() == b"error" =>
+            {
+                if let Some(test) = current.as_mut() {
+                    test.error_message = current_failure.take();
+                }
+            }
+
+            Ok(quick_xml::events::Event::End(ref event))
+                if event.name().as_ref() == b"testcase" =>
+            {
+                if let Some(test) = current.take() {
+                    results.push(test);
+                }
+            }
+
+            Ok(quick_xml::events::Event::Eof) => break,
+
+            Err(e) => {
+                return Err(format!("Failed to parse JUnit XML: {}", e));
+            }
+
+            _ => {}
+        }
+    }
+
+    Ok(results)
+}
+
+fn parse_testcase_attributes(
+    event: &quick_xml::events::BytesStart,
+) -> TestResult {
+    let mut name = String::new();
+    let mut file = String::new();
+    let mut duration = 0.0;
+
+    for attribute in event.attributes().flatten() {
+        match attribute.key.as_ref() {
+            b"name" => {
+                name =
+                    String::from_utf8_lossy(&attribute.value).to_string();
+            }
+            b"file" => {
+                file =
+                    String::from_utf8_lossy(&attribute.value).to_string();
+            }
+            b"time" => {
+                duration = String::from_utf8_lossy(&attribute.value)
+                    .parse()
+                    .unwrap_or(0.0);
+            }
+            _ => {}
+        }
+    }
+
+    let id = if file.is_empty() {
+        name.clone()
+    } else {
+        format!("{}::{}", file, name)
+    };
+
+    TestResult {
+        id,
+        name,
+        file,
+        status: "passed".to_string(),
+        duration,
+        error_message: None,
+    }
+}
+
+#[tauri::command]
+pub async fn open_in_file_manager(path: String) -> Result<(), String> {
+    let target = std::path::Path::new(&path);
+
+    if !target.exists() {
+        return Err(format!("Path does not exist: {}", path));
+    }
+
+    // Linux: 根据桌面环境选择文件管理器
+    #[cfg(target_os = "linux")]
+    {
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP")
+            .unwrap_or_default()
+            .to_lowercase();
+
+        let result = if desktop.contains("kde") {
+            Command::new("dolphin").arg(&path).spawn()
+        } else if desktop.contains("xfce") {
+            Command::new("thunar").arg(&path).spawn()
+        } else {
+            // GNOME 或其他，用 nautilus；fallback 到 xdg-open
+            Command::new("nautilus").arg(&path).spawn()
+                .or_else(|_| Command::new("xdg-open").arg(&path).spawn())
+        };
+
+        result.map_err(|e| format!("Failed to open file manager: {}", e))?;
+    }
+
+    // macOS
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open Finder: {}", e))?;
+    }
+
+    // Windows
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open Explorer: {}", e))?;
+    }
+
+    Ok(())
 }

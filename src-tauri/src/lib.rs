@@ -18,10 +18,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::scan_test_files,
             commands::collect_test_cases,
+            commands::run_tests,
             commands::detect_python_env,
             commands::install_dependencies,
             commands::validate_project_directory,
             commands::create_virtual_env,
+            commands::open_in_file_manager,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
