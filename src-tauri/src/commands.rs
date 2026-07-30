@@ -465,8 +465,16 @@ pub fn collect_test_cases(project_path: String) -> Result<Vec<TestCase>, String>
 
     let python = find_project_python(&project)?;
 
+    let python_root = project
+        .parent()
+        .ok_or("Failed to determine project parent directory")?;
+
     let output = Command::new(&python)
         .current_dir(&project)
+        .env(
+            "PYTHONPATH",
+            build_python_path(&project)
+        )
         .args([
             "-m",
             "pytest",
@@ -645,12 +653,13 @@ pub struct TestFinishedEvent {
     pub failed: usize,
     pub skipped: usize,
     pub results: Vec<TestResult>,
+    pub command: String,
 }
 
 #[tauri::command]
 pub async fn run_tests(
     app_handle: AppHandle,
-    project_id: i64,
+    project_id: i64, 
     project_path: String,
     interpreter_path: String,
     test_cases: Vec<String>,
@@ -658,7 +667,6 @@ pub async fn run_tests(
 ) -> Result<String, String> {
     let run_id = Uuid::new_v4().to_string();
     let project = PathBuf::from(&project_path);
-
     if !project.exists() {
         return Err(format!("Project path does not exist: {}", project_path));
     }
@@ -675,7 +683,6 @@ pub async fn run_tests(
     }
 
     let total = test_cases.len();
-
     let _ = app_handle.emit(
         "test-started",
         TestStartedEvent {
@@ -684,113 +691,102 @@ pub async fn run_tests(
         },
     );
 
-    let junit_path =
-        std::env::temp_dir().join(format!("pytest-{}.xml", run_id));
+    let junit_path = std::env::temp_dir().join(format!("pytest-{}.xml", run_id));
 
-    let mut args = vec![
-        "-m".to_string(),
-        "pytest".to_string(),
-        "-v".to_string(),
-    ];
+    let mut args = vec!["-m".to_string(), "pytest".to_string(), "-v".to_string()];
     args.extend(pytest_args);
     if !test_cases.is_empty() {
         args.extend(test_cases);
     }
     args.push(format!("--junitxml={}", junit_path.to_string_lossy()));
 
-    let start = std::time::Instant::now();
+    let mut command_str = interpreter.display().to_string();
+    for arg in &args {
+        command_str.push(' ');
+        command_str.push_str(arg);
+    }
 
-    // ✅ 使用 AsyncCommand（tokio::process::Command）
-    let mut child = AsyncCommand::new(&interpreter)
+    let start = std::time::Instant::now();
+    let python_root = project
+        .parent()
+        .ok_or("Failed to determine project parent directory")?;
+
+    let mut child = match AsyncCommand::new(&interpreter)
         .current_dir(&project)
+        .env(
+            "PYTHONPATH",
+            build_python_path(&project)
+        )
         .args(&args)
-        .stdout(Stdio::piped())   // ✅ tokio::process::Stdio
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null())
         .spawn()
-        .map_err(|e| format!("Failed to start pytest: {}", e))?;
+    {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = app_handle.emit("test-finished", TestFinishedEvent {
+                run_id: run_id.clone(),
+                success: false,
+                exit_code: None,
+                duration: 0.0,
+                passed: 0,
+                failed: 0,
+                skipped: 0,
+                results: vec![],
+                command: command_str.clone(),
+            });
+            return Err(format!("Failed to start pytest: {}", e));
+        }
+    };
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Failed to capture pytest stdout".to_string())?;
+    let stdout = child.stdout.take().ok_or_else(|| "Failed to capture pytest stdout".to_string())?;
+    let stderr = child.stderr.take().ok_or_else(|| "Failed to capture pytest stderr".to_string())?;
 
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Failed to capture pytest stderr".to_string())?;
-
-    // --- stdout 逐行读取 ---
     let stdout_handle = app_handle.clone();
     let stdout_run_id = run_id.clone();
-
     let stdout_task = tokio::spawn(async move {
-        let reader = BufReader::new(stdout); // ✅ 现在是 tokio ChildStdout，满足 AsyncRead
+        let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
-
         while let Ok(Some(line)) = lines.next_line().await {
-            let _ = stdout_handle.emit(
-                "test-output",
-                TestOutputEvent {
-                    run_id: stdout_run_id.clone(),
-                    stream: "stdout".to_string(),
-                    line,
-                },
-            );
+            let _ = stdout_handle.emit("test-output", TestOutputEvent {
+                run_id: stdout_run_id.clone(),
+                stream: "stdout".to_string(),
+                line,
+            });
         }
     });
 
-    // --- stderr 逐行读取 ---
     let stderr_handle = app_handle.clone();
     let stderr_run_id = run_id.clone();
-
     let stderr_task = tokio::spawn(async move {
-        let reader = BufReader::new(stderr); // ✅ 同上
+        let reader = BufReader::new(stderr);
         let mut lines = reader.lines();
-
         while let Ok(Some(line)) = lines.next_line().await {
-            let _ = stderr_handle.emit(
-                "test-output",
-                TestOutputEvent {
-                    run_id: stderr_run_id.clone(),
-                    stream: "stderr".to_string(),
-                    line,
-                },
-            );
+            let _ = stderr_handle.emit("test-output", TestOutputEvent {
+                run_id: stderr_run_id.clone(),
+                stream: "stderr".to_string(),
+                line,
+            });
         }
     });
 
-    // ✅ tokio Child::wait() 是 async，可以 .await
-    let status = child
-        .wait()
-        .await
-        .map_err(|e| format!("Failed waiting for pytest: {}", e))?;
-
+    let status = child.wait().await.map_err(|e| format!("Failed waiting for pytest: {}", e))?;
     let _ = stdout_task.await;
     let _ = stderr_task.await;
-
     let duration = start.elapsed().as_secs_f64();
-    let results = parse_junit_results(&junit_path)?;
+
+    let results = match parse_junit_results(&junit_path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Failed to parse JUnit XML: {}", e);
+            vec![]
+        }
+    };
 
     let passed = results.iter().filter(|r| r.status == "passed").count();
-    let failed = results.iter().filter(|r| r.status == "failed").count();
+    let failed = results.iter().filter(|r| r.status == "failed" || r.status == "error").count();
     let skipped = results.iter().filter(|r| r.status == "skipped").count();
-
-
-    test_execution_repository::insert_execution_history(
-        db,
-        NewExecutionHistory {
-            project_id,
-            execution_type,
-            execution_status,
-            command,
-            total_tests: results.len(),
-            passed: passed,
-            failed: failed,
-            skipped: skipped,
-            execution_time,
-        },
-    )?;
 
     let _ = app_handle.emit(
         "test-finished",
@@ -803,11 +799,11 @@ pub async fn run_tests(
             failed,
             skipped,
             results,
+            command: command_str,
         },
     );
 
     let _ = std::fs::remove_file(junit_path);
-
     Ok(run_id)
 }
 
@@ -997,4 +993,26 @@ pub async fn open_in_file_manager(path: String) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn build_python_path(project: &Path) -> String {
+    let mut paths = vec![];
+
+    if let Some(parent) = project.parent() {
+        paths.push(parent.to_string_lossy().to_string());
+    }
+
+    if let Ok(existing) = std::env::var("PYTHONPATH") {
+        if !existing.is_empty() {
+            paths.push(existing);
+        }
+    }
+
+    let separator = if cfg!(target_os = "windows") {
+        ";"
+    } else {
+        ":"
+    };
+
+    paths.join(separator)
 }

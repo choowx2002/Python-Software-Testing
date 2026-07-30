@@ -23,6 +23,7 @@ import {
 } from "@lucide/vue";
 import { useProjectStore } from "../../../stores/projectStore";
 import { parseArguments } from "../../../helper/execute";
+import { getDatabase } from "../../../utils/db";
 
 const route = useRoute();
 const projectStore = useProjectStore();
@@ -51,6 +52,7 @@ interface TestOutputEvent {
   runId: string;
   stream: "stdout" | "stderr";
   line: string;
+  logId?: number;
 }
 
 interface TestResult {
@@ -76,6 +78,7 @@ interface TestFinishedEvent {
   failed: number;
   skipped: number;
   results: TestResult[];
+  command: string;
 }
 
 interface Preset {
@@ -137,7 +140,7 @@ const expandedFailures = ref<Set<string>>(new Set());
 let unlistenStarted: UnlistenFn | undefined;
 let unlistenOutput: UnlistenFn | undefined;
 let unlistenFinished: UnlistenFn | undefined;
-
+let logCounter = 0;
 /* -------------------------------------------------------------------------- */
 /* Presets                                                                    */
 /* -------------------------------------------------------------------------- */
@@ -429,6 +432,7 @@ async function setupTestListeners() {
     executionStatus.value = "running";
     isRunning.value = true;
     showPytestOutput.value = false;
+    logCounter = 0;
   });
 
   unlistenOutput = await listen<TestOutputEvent>("test-output", (event) => {
@@ -436,13 +440,21 @@ async function setupTestListeners() {
       return;
     }
 
-    pytestOutput.value.push(event.payload);
+    pytestOutput.value.push({
+      ...event.payload,
+      logId: logCounter++,
+    });
+
+    if (pytestOutput.value.length > 500) {
+      pytestOutput.value.shift();
+    }
+
     parseRealtimeProgress(event.payload.line);
   });
 
   unlistenFinished = await listen<TestFinishedEvent>(
     "test-finished",
-    (event) => {
+    async (event) => {
       if (event.payload.runId !== currentRunId.value) {
         return;
       }
@@ -467,6 +479,18 @@ async function setupTestListeners() {
       completedTests.value = event.payload.results.length;
 
       currentTest.value = null;
+
+      await saveExecutionToDb(event.payload);
+
+      if (!event.payload.success && event.payload.results.length === 0) {
+        pytestOutput.value.push({
+          runId: event.payload.runId,
+          stream: "stderr",
+          line: "\n[系统警告] 测试进程异常退出，未生成有效的测试结果文件 (JUnit XML)。请检查上方的错误日志。",
+          logId: logCounter++,
+        });
+        showPytestOutput.value = true;
+      }
     },
   );
 }
@@ -695,13 +719,15 @@ async function runTests() {
     executionStatus.value = "failed";
     currentTest.value = null;
 
-    if (pytestOutput.value.length === 0) {
-      pytestOutput.value.push({
-        runId: currentRunId.value ?? "local",
-        stream: "stderr",
-        line: String(error),
-      });
-    }
+    const errorMsg = error instanceof Error ? error.message : String(error);
+
+    pytestOutput.value.push({
+      runId: currentRunId.value ?? "local",
+      stream: "stderr",
+      line: `\n[Fatal Error] 测试环境启动失败: ${errorMsg}`,
+      logId: logCounter++,
+    });
+    showPytestOutput.value = true;
   }
 }
 
@@ -744,6 +770,39 @@ function resetExecutionState() {
 //     "[Execute] Stop is not available until a process cancellation command is implemented.",
 //   );
 // }
+
+/**
+ * 将测试执行结果持久化到本地 SQLite 数据库
+ */
+async function saveExecutionToDb(payload: TestFinishedEvent) {
+  if (!currentProject.value?.id) return;
+
+  try {
+    const db = await getDatabase();
+    const totalTests = payload.passed + payload.failed + payload.skipped;
+    const executionStatus = payload.success ? "success" : "failed";
+
+    await db.execute(
+      `INSERT INTO test_execution_history 
+       (project_id, execution_type, execution_status, command, total_tests, passed, failed, skipped, execution_time) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        currentProject.value.id,
+        "pytest",
+        executionStatus,
+        payload.command,
+        totalTests,
+        payload.passed,
+        payload.failed,
+        payload.skipped,
+        payload.duration,
+      ]
+    );
+    console.log("[DB] ✅ Execution history saved successfully");
+  } catch (error) {
+    console.error("[DB] ❌ Failed to save execution history:", error);
+  }
+}
 
 /* -------------------------------------------------------------------------- */
 /* Results                                                                    */
@@ -898,9 +957,7 @@ onUnmounted(() => {
     <header class="flex items-start justify-between gap-4">
       <div class="min-w-0">
         <div class="flex items-center gap-3">
-          <div
-            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600"
-          >
+          <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
             <Play class="h-4 w-4" />
           </div>
 
@@ -918,15 +975,9 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div
-        class="inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium"
-        :class="statusClass"
-      >
-        <component
-          :is="statusIcon"
-          class="h-3.5 w-3.5"
-          :class="{ 'animate-spin': executionStatus === 'running' }"
-        />
+      <div class="inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium"
+        :class="statusClass">
+        <component :is="statusIcon" class="h-3.5 w-3.5" :class="{ 'animate-spin': executionStatus === 'running' }" />
 
         {{ statusText }}
       </div>
@@ -934,9 +985,7 @@ onUnmounted(() => {
 
     <!-- Select Tests -->
     <section class="rounded-2xl border border-slate-200 bg-white">
-      <div
-        class="flex items-center justify-between gap-4 border-b border-slate-200 px-5 py-4"
-      >
+      <div class="flex items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
         <div>
           <div class="flex items-center gap-2">
             <ListChecks class="h-4 w-4 text-slate-500" />
@@ -949,18 +998,12 @@ onUnmounted(() => {
           </p>
         </div>
 
-        <button
-          type="button"
-          :disabled="isCollecting || isLoadingTests || isRunning"
+        <button type="button" :disabled="isCollecting || isLoadingTests || isRunning"
           class="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-          @click="refreshTests"
-        >
-          <RefreshCw
-            class="h-3.5 w-3.5"
-            :class="{
-              'animate-spin': isCollecting || isLoadingTests,
-            }"
-          />
+          @click="refreshTests">
+          <RefreshCw class="h-3.5 w-3.5" :class="{
+            'animate-spin': isCollecting || isLoadingTests,
+          }" />
 
           {{ isCollecting || isLoadingTests ? "Refreshing..." : "Refresh" }}
         </button>
@@ -969,17 +1012,11 @@ onUnmounted(() => {
       <div class="p-5">
         <!-- Scope -->
         <div class="grid grid-cols-3 gap-2">
-          <button
-            type="button"
-            :disabled="isRunning"
-            class="rounded-xl border px-4 py-3 text-left transition disabled:cursor-not-allowed"
-            :class="
-              testScope === 'all'
-                ? 'border-emerald-300 bg-emerald-50'
-                : 'border-slate-200 hover:bg-slate-50'
-            "
-            @click="setScope('all')"
-          >
+          <button type="button" :disabled="isRunning"
+            class="rounded-xl border px-4 py-3 text-left transition disabled:cursor-not-allowed" :class="testScope === 'all'
+              ? 'border-emerald-300 bg-emerald-50'
+              : 'border-slate-200 hover:bg-slate-50'
+              " @click="setScope('all')">
             <div class="text-sm font-medium text-slate-900">All Tests</div>
 
             <div class="mt-1 text-xs text-slate-500">
@@ -987,17 +1024,11 @@ onUnmounted(() => {
             </div>
           </button>
 
-          <button
-            type="button"
-            :disabled="isRunning"
-            class="rounded-xl border px-4 py-3 text-left transition disabled:cursor-not-allowed"
-            :class="
-              testScope === 'file'
-                ? 'border-emerald-300 bg-emerald-50'
-                : 'border-slate-200 hover:bg-slate-50'
-            "
-            @click="setScope('file')"
-          >
+          <button type="button" :disabled="isRunning"
+            class="rounded-xl border px-4 py-3 text-left transition disabled:cursor-not-allowed" :class="testScope === 'file'
+              ? 'border-emerald-300 bg-emerald-50'
+              : 'border-slate-200 hover:bg-slate-50'
+              " @click="setScope('file')">
             <div class="text-sm font-medium text-slate-900">Test File</div>
 
             <div class="mt-1 text-xs text-slate-500">
@@ -1005,17 +1036,11 @@ onUnmounted(() => {
             </div>
           </button>
 
-          <button
-            type="button"
-            :disabled="isRunning"
-            class="rounded-xl border px-4 py-3 text-left transition disabled:cursor-not-allowed"
-            :class="
-              testScope === 'selected'
-                ? 'border-emerald-300 bg-emerald-50'
-                : 'border-slate-200 hover:bg-slate-50'
-            "
-            @click="setScope('selected')"
-          >
+          <button type="button" :disabled="isRunning"
+            class="rounded-xl border px-4 py-3 text-left transition disabled:cursor-not-allowed" :class="testScope === 'selected'
+              ? 'border-emerald-300 bg-emerald-50'
+              : 'border-slate-200 hover:bg-slate-50'
+              " @click="setScope('selected')">
             <div class="text-sm font-medium text-slate-900">Selected Tests</div>
 
             <div class="mt-1 text-xs text-slate-500">
@@ -1030,18 +1055,11 @@ onUnmounted(() => {
             Test File
           </label>
 
-          <select
-            v-model="selectedTestFile"
-            :disabled="isRunning || testFiles.length === 0"
-            class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-50 disabled:text-slate-400"
-          >
+          <select v-model="selectedTestFile" :disabled="isRunning || testFiles.length === 0"
+            class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-50 disabled:text-slate-400">
             <option value="" disabled>Select a test file</option>
 
-            <option
-              v-for="file in testFiles"
-              :key="file.relativePath"
-              :value="file.relativePath"
-            >
+            <option v-for="file in testFiles" :key="file.relativePath" :value="file.relativePath">
               {{ file.relativePath }}
             </option>
           </select>
@@ -1049,22 +1067,14 @@ onUnmounted(() => {
 
         <!-- Test list -->
         <div class="mt-5 rounded-xl border border-slate-200">
-          <div
-            class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3"
-          >
+          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
             <div class="flex min-w-0 items-center gap-3">
               <div class="relative">
                 <Search
-                  class="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400"
-                />
+                  class="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
 
-                <input
-                  v-model="testSearch"
-                  type="text"
-                  placeholder="Search tests..."
-                  :disabled="isRunning"
-                  class="w-64 rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-xs text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-50"
-                />
+                <input v-model="testSearch" type="text" placeholder="Search tests..." :disabled="isRunning"
+                  class="w-64 rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-xs text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-50" />
               </div>
 
               <span class="text-xs text-slate-500">
@@ -1073,45 +1083,31 @@ onUnmounted(() => {
             </div>
 
             <div class="flex items-center gap-2">
-              <button
-                type="button"
-                :disabled="
-                  isRunning ||
-                  filteredTestCases.length === 0 ||
-                  allVisibleSelected
+              <button type="button" :disabled="isRunning ||
+                filteredTestCases.length === 0 ||
+                allVisibleSelected
                 "
                 class="rounded-lg px-2.5 py-2 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
-                @click="selectAllVisible"
-              >
+                @click="selectAllVisible">
                 Select All
               </button>
 
-              <button
-                type="button"
-                :disabled="isRunning || selectedTestCases.length === 0"
+              <button type="button" :disabled="isRunning || selectedTestCases.length === 0"
                 class="rounded-lg px-2.5 py-2 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
-                @click="clearSelection"
-              >
+                @click="clearSelection">
                 Clear
               </button>
             </div>
           </div>
 
-          <div
-            class="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-4 py-2.5"
-          >
+          <div class="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-4 py-2.5">
             <div class="flex items-center gap-2">
-              <button
-                type="button"
-                :disabled="isRunning || filteredTestCases.length === 0"
+              <button type="button" :disabled="isRunning || filteredTestCases.length === 0"
                 class="flex h-4 w-4 items-center justify-center rounded border transition disabled:cursor-not-allowed"
-                :class="
-                  allVisibleSelected
-                    ? 'border-emerald-500 bg-emerald-500 text-white'
-                    : 'border-slate-300 bg-white'
-                "
-                @click="toggleVisibleSelection"
-              >
+                :class="allVisibleSelected
+                  ? 'border-emerald-500 bg-emerald-500 text-white'
+                  : 'border-slate-300 bg-white'
+                  " @click="toggleVisibleSelection">
                 <Check v-if="allVisibleSelected" class="h-3 w-3" />
               </button>
 
@@ -1125,24 +1121,16 @@ onUnmounted(() => {
             </span>
           </div>
 
-          <div
-            v-if="isCollecting"
-            class="px-5 py-10 text-center text-sm text-slate-500"
-          >
+          <div v-if="isCollecting" class="px-5 py-10 text-center text-sm text-slate-500">
             Collecting test cases...
           </div>
 
-          <div
-            v-else-if="collectError"
-            class="m-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"
-          >
+          <div v-else-if="collectError"
+            class="m-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
             {{ collectError }}
           </div>
 
-          <div
-            v-else-if="testCases.length === 0"
-            class="px-5 py-10 text-center"
-          >
+          <div v-else-if="testCases.length === 0" class="px-5 py-10 text-center">
             <div class="text-sm font-medium text-slate-700">
               No test cases found
             </div>
@@ -1153,30 +1141,18 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <div
-            v-else-if="filteredTestCases.length === 0"
-            class="px-5 py-10 text-center text-sm text-slate-500"
-          >
+          <div v-else-if="filteredTestCases.length === 0" class="px-5 py-10 text-center text-sm text-slate-500">
             No tests match your search.
           </div>
 
           <div v-else class="max-h-80 overflow-auto">
-            <button
-              v-for="test in filteredTestCases"
-              :key="test.id"
-              type="button"
-              :disabled="isRunning"
+            <button v-for="test in filteredTestCases" :key="test.id" type="button" :disabled="isRunning"
               class="flex w-full items-center gap-3 border-b border-slate-100 px-4 py-3 text-left transition last:border-b-0 hover:bg-slate-50 disabled:cursor-not-allowed"
-              @click="toggleTest(test.id)"
-            >
-              <span
-                class="flex h-4 w-4 shrink-0 items-center justify-center rounded border transition"
-                :class="
-                  isTestSelected(test.id)
-                    ? 'border-emerald-500 bg-emerald-500 text-white'
-                    : 'border-slate-300 bg-white'
-                "
-              >
+              @click="toggleTest(test.id)">
+              <span class="flex h-4 w-4 shrink-0 items-center justify-center rounded border transition" :class="isTestSelected(test.id)
+                ? 'border-emerald-500 bg-emerald-500 text-white'
+                : 'border-slate-300 bg-white'
+                ">
                 <Check v-if="isTestSelected(test.id)" class="h-3 w-3" />
               </span>
 
@@ -1187,9 +1163,7 @@ onUnmounted(() => {
                   {{ test.name }}
                 </span>
 
-                <span
-                  class="mt-0.5 block truncate font-mono text-[11px] text-slate-500"
-                >
+                <span class="mt-0.5 block truncate font-mono text-[11px] text-slate-500">
                   {{ test.file }}
                   <template v-if="test.className">
                     ::{{ test.className }}
@@ -1200,10 +1174,8 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div
-          v-if="testScanError"
-          class="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700"
-        >
+        <div v-if="testScanError"
+          class="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
           {{ testScanError }}
         </div>
       </div>
@@ -1227,31 +1199,21 @@ onUnmounted(() => {
 
       <div class="p-5">
         <div class="grid grid-cols-2 gap-3">
-          <button
-            v-for="preset in presets"
-            :key="preset.id"
-            type="button"
-            :disabled="isRunning"
-            class="rounded-xl border p-4 text-left transition disabled:cursor-not-allowed"
-            :class="
-              selectedPreset === preset.id && !customArguments.trim()
-                ? 'border-emerald-300 bg-emerald-50'
-                : 'border-slate-200 hover:bg-slate-50'
-            "
-            @click="
-              selectedPreset = preset.id;
+          <button v-for="preset in presets" :key="preset.id" type="button" :disabled="isRunning"
+            class="rounded-xl border p-4 text-left transition disabled:cursor-not-allowed" :class="selectedPreset === preset.id && !customArguments.trim()
+              ? 'border-emerald-300 bg-emerald-50'
+              : 'border-slate-200 hover:bg-slate-50'
+              " @click="
+                selectedPreset = preset.id;
               customArguments = '';
-            "
-          >
+              ">
             <div class="flex items-center justify-between gap-3">
               <span class="text-sm font-medium text-slate-900">
                 {{ preset.name }}
               </span>
 
-              <span
-                v-if="selectedPreset === preset.id && !customArguments.trim()"
-                class="text-xs font-medium text-emerald-600"
-              >
+              <span v-if="selectedPreset === preset.id && !customArguments.trim()"
+                class="text-xs font-medium text-emerald-600">
                 Selected
               </span>
             </div>
@@ -1267,11 +1229,9 @@ onUnmounted(() => {
         </div>
 
         <div class="mt-4 border-t border-slate-100 pt-4">
-          <button
-            type="button"
+          <button type="button"
             class="flex items-center gap-2 text-xs font-medium text-slate-600 transition hover:text-slate-900"
-            @click="showAdvanced = !showAdvanced"
-          >
+            @click="showAdvanced = !showAdvanced">
             <ChevronDown v-if="showAdvanced" class="h-4 w-4" />
 
             <ChevronRight v-else class="h-4 w-4" />
@@ -1284,13 +1244,9 @@ onUnmounted(() => {
               Custom pytest arguments
             </label>
 
-            <input
-              v-model="customArguments"
-              :disabled="isRunning"
-              type="text"
+            <input v-model="customArguments" :disabled="isRunning" type="text"
               placeholder="Example: --maxfail=3 --tb=long"
-              class="w-full rounded-xl border border-slate-200 px-3 py-2.5 font-mono text-xs text-slate-700 outline-none transition placeholder:font-sans placeholder:text-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-50"
-            />
+              class="w-full rounded-xl border border-slate-200 px-3 py-2.5 font-mono text-xs text-slate-700 outline-none transition placeholder:font-sans placeholder:text-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-50" />
 
             <p class="mt-1.5 text-[11px] text-slate-400">
               Custom arguments override the selected preset.
@@ -1298,9 +1254,7 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div
-          class="mt-5 flex items-center justify-between border-t border-slate-100 pt-4"
-        >
+        <div class="mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
           <div>
             <div class="text-xs font-medium text-slate-700">
               {{ selectedScopeDescription }}
@@ -1315,24 +1269,16 @@ onUnmounted(() => {
           </div>
 
           <div class="flex items-center gap-2">
-            <button
-              v-if="isRunning"
-              type="button"
-              disabled
+            <button v-if="isRunning" type="button" disabled
               class="inline-flex cursor-not-allowed items-center gap-2 rounded-xl bg-slate-200 px-5 py-2.5 text-sm font-medium text-slate-500"
-              title="Process cancellation is not implemented yet"
-            >
+              title="Process cancellation is not implemented yet">
               <Square class="h-4 w-4" />
               Running
             </button>
 
-            <button
-              v-else
-              type="button"
-              :disabled="!canRun"
+            <button v-else type="button" :disabled="!canRun"
               class="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
-              @click="runTests"
-            >
+              @click="runTests">
               <Play class="h-4 w-4" />
               Run Tests
             </button>
@@ -1343,9 +1289,7 @@ onUnmounted(() => {
 
     <!-- Execution -->
     <section class="rounded-2xl border border-slate-200 bg-white">
-      <div
-        class="flex items-center justify-between gap-4 border-b border-slate-200 px-5 py-4"
-      >
+      <div class="flex items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
         <div>
           <div class="text-sm font-semibold text-slate-900">Execution</div>
 
@@ -1360,10 +1304,8 @@ onUnmounted(() => {
       </div>
 
       <div class="p-5">
-        <div
-          v-if="executionStatus === 'idle'"
-          class="rounded-xl border border-dashed border-slate-200 px-5 py-10 text-center"
-        >
+        <div v-if="executionStatus === 'idle'"
+          class="rounded-xl border border-dashed border-slate-200 px-5 py-10 text-center">
           <div class="text-sm font-medium text-slate-700">Ready to run</div>
 
           <div class="mt-1 text-xs text-slate-500">
@@ -1393,13 +1335,8 @@ onUnmounted(() => {
           </div>
 
           <div class="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
-            <div
-              class="h-full rounded-full transition-all duration-300"
-              :class="
-                executionStatus === 'failed' ? 'bg-rose-500' : 'bg-emerald-500'
-              "
-              :style="{ width: `${progress}%` }"
-            />
+            <div class="h-full rounded-full transition-all duration-300" :class="executionStatus === 'failed' ? 'bg-rose-500' : 'bg-emerald-500'
+              " :style="{ width: `${progress}%` }" />
           </div>
 
           <div class="mt-5 grid grid-cols-3 gap-3">
@@ -1428,13 +1365,8 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <div
-            v-if="isRunning && currentTest"
-            class="mt-5 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3"
-          >
-            <div
-              class="text-[10px] font-semibold uppercase tracking-wide text-blue-500"
-            >
+          <div v-if="isRunning && currentTest" class="mt-5 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
+            <div class="text-[10px] font-semibold uppercase tracking-wide text-blue-500">
               Current Test
             </div>
 
@@ -1443,10 +1375,7 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <div
-            v-if="!isRunning"
-            class="mt-5 flex items-center justify-between border-t border-slate-100 pt-4"
-          >
+          <div v-if="!isRunning" class="mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
             <span class="text-xs text-slate-500">
               Duration:
               <span class="font-medium text-slate-700">
@@ -1463,10 +1392,7 @@ onUnmounted(() => {
     </section>
 
     <!-- Result -->
-    <section
-      v-if="hasResult"
-      class="rounded-2xl border border-slate-200 bg-white"
-    >
+    <section v-if="hasResult" class="rounded-2xl border border-slate-200 bg-white">
       <div class="border-b border-slate-200 px-5 py-4">
         <div class="flex items-center justify-between gap-4">
           <div>
@@ -1477,13 +1403,9 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <button
-            v-if="failedResults.length > 0"
-            type="button"
-            :disabled="isRunning"
+          <button v-if="failedResults.length > 0" type="button" :disabled="isRunning"
             class="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-            @click="rerunFailedTests"
-          >
+            @click="rerunFailedTests">
             <RotateCcw class="h-3.5 w-3.5" />
             Rerun Failed
           </button>
@@ -1492,42 +1414,28 @@ onUnmounted(() => {
 
       <div class="p-5">
         <!-- Conclusion -->
-        <div
-          class="rounded-2xl border p-5"
-          :class="
-            failedTests > 0 || executionStatus === 'failed'
-              ? 'border-rose-200 bg-rose-50'
-              : 'border-emerald-200 bg-emerald-50'
-          "
-        >
+        <div class="rounded-2xl border p-5" :class="failedTests > 0 || executionStatus === 'failed'
+          ? 'border-rose-200 bg-rose-50'
+          : 'border-emerald-200 bg-emerald-50'
+          ">
           <div class="flex items-start gap-3">
-            <CheckCircle2
-              v-if="executionStatus === 'completed' && failedTests === 0"
-              class="mt-0.5 h-5 w-5 shrink-0 text-emerald-600"
-            />
+            <CheckCircle2 v-if="executionStatus === 'completed' && failedTests === 0"
+              class="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
 
             <XCircle v-else class="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
 
             <div>
-              <div
-                class="text-sm font-semibold"
-                :class="
-                  failedTests > 0 || executionStatus === 'failed'
-                    ? 'text-rose-800'
-                    : 'text-emerald-800'
-                "
-              >
+              <div class="text-sm font-semibold" :class="failedTests > 0 || executionStatus === 'failed'
+                ? 'text-rose-800'
+                : 'text-emerald-800'
+                ">
                 {{ resultConclusion.title }}
               </div>
 
-              <div
-                class="mt-1 text-xs"
-                :class="
-                  failedTests > 0 || executionStatus === 'failed'
-                    ? 'text-rose-700'
-                    : 'text-emerald-700'
-                "
-              >
+              <div class="mt-1 text-xs" :class="failedTests > 0 || executionStatus === 'failed'
+                ? 'text-rose-700'
+                : 'text-emerald-700'
+                ">
                 {{ resultConclusion.description }}
               </div>
             </div>
@@ -1570,66 +1478,43 @@ onUnmounted(() => {
         </div>
 
         <!-- Result filters -->
-        <div
-          v-if="testResults.length > 0"
-          class="mt-5 flex items-center gap-2 border-b border-slate-100 pb-3"
-        >
-          <button
-            v-for="filter in [
-              { id: 'all', label: `All ${testResults.length}` },
-              { id: 'passed', label: `Passed ${passedTests}` },
-              { id: 'failed', label: `Failed ${failedTests}` },
-              { id: 'skipped', label: `Skipped ${skippedTests}` },
-            ]"
-            :key="filter.id"
-            type="button"
-            class="rounded-lg px-3 py-1.5 text-xs font-medium transition"
-            :class="
-              resultFilter === filter.id
-                ? 'bg-slate-900 text-white'
-                : 'text-slate-500 hover:bg-slate-100'
-            "
-            @click="resultFilter = filter.id as ResultFilter"
-          >
+        <div v-if="testResults.length > 0" class="mt-5 flex items-center gap-2 border-b border-slate-100 pb-3">
+          <button v-for="filter in [
+            { id: 'all', label: `All ${testResults.length}` },
+            { id: 'passed', label: `Passed ${passedTests}` },
+            { id: 'failed', label: `Failed ${failedTests}` },
+            { id: 'skipped', label: `Skipped ${skippedTests}` },
+          ]" :key="filter.id" type="button" class="rounded-lg px-3 py-1.5 text-xs font-medium transition" :class="resultFilter === filter.id
+            ? 'bg-slate-900 text-white'
+            : 'text-slate-500 hover:bg-slate-100'
+            " @click="resultFilter = filter.id as ResultFilter">
             {{ filter.label }}
           </button>
         </div>
 
         <!-- Failed tests -->
-        <div
-          v-if="filteredResults.length > 0"
-          class="mt-3 divide-y divide-slate-100"
-        >
+        <div v-if="filteredResults.length > 0" class="mt-3 divide-y divide-slate-100">
           <div v-for="result in filteredResults" :key="result.id" class="py-3">
             <div class="flex items-center gap-3">
-              <component
-                :is="getResultIcon(result.status)"
-                class="h-4 w-4 shrink-0"
-                :class="
-                  result.status === 'passed'
-                    ? 'text-emerald-500'
-                    : result.status === 'skipped'
-                      ? 'text-amber-500'
-                      : 'text-rose-500'
-                "
-              />
+              <component :is="getResultIcon(result.status)" class="h-4 w-4 shrink-0" :class="result.status === 'passed'
+                ? 'text-emerald-500'
+                : result.status === 'skipped'
+                  ? 'text-amber-500'
+                  : 'text-rose-500'
+                " />
 
               <div class="min-w-0 flex-1">
                 <div class="truncate text-sm font-medium text-slate-800">
                   {{ result.name }}
                 </div>
 
-                <div
-                  class="mt-0.5 truncate font-mono text-[11px] text-slate-500"
-                >
+                <div class="mt-0.5 truncate font-mono text-[11px] text-slate-500">
                   {{ result.file }}
                 </div>
               </div>
 
-              <span
-                class="hidden rounded-full border px-2 py-1 text-[10px] font-medium sm:inline-flex"
-                :class="getResultClass(result.status)"
-              >
+              <span class="hidden rounded-full border px-2 py-1 text-[10px] font-medium sm:inline-flex"
+                :class="getResultClass(result.status)">
                 {{ getResultLabel(result.status) }}
               </span>
 
@@ -1637,50 +1522,39 @@ onUnmounted(() => {
                 {{ result.duration.toFixed(2) }}s
               </span>
 
-              <button
-                v-if="
-                  result.errorMessage &&
-                  (result.status === 'failed' || result.status === 'error')
-                "
-                type="button"
+              <button v-if="
+                result.errorMessage &&
+                (result.status === 'failed' || result.status === 'error')
+              " type="button"
                 class="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-                @click="toggleFailure(result.id)"
-              >
-                <ChevronDown
-                  v-if="isFailureExpanded(result.id)"
-                  class="h-4 w-4"
-                />
+                @click="toggleFailure(result.id)">
+                <ChevronDown v-if="isFailureExpanded(result.id)" class="h-4 w-4" />
 
                 <ChevronRight v-else class="h-4 w-4" />
               </button>
             </div>
 
-            <div
-              v-if="
-                result.errorMessage &&
-                (result.status === 'failed' || result.status === 'error') &&
-                isFailureExpanded(result.id)
-              "
-              class="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3"
-            >
+            <div v-if="
+              result.errorMessage &&
+              (result.status === 'failed' || result.status === 'error') &&
+              isFailureExpanded(result.id)
+            " class="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3">
               <div class="flex items-center justify-between gap-3">
                 <span class="text-xs font-medium text-rose-800">
                   Failure Details
                 </span>
 
-                <button
-                  type="button"
+                <button type="button"
                   class="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-medium text-rose-700 transition hover:bg-rose-100"
-                  @click="copyError(result.errorMessage)"
-                >
+                  @click="copyError(result.errorMessage)">
                   <Copy class="h-3 w-3" />
                   Copy
                 </button>
               </div>
 
               <pre
-                class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-5 text-rose-800"
-                >{{ result.errorMessage }}</pre>
+                class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-5 text-rose-800">
+            {{ result.errorMessage }}</pre>
             </div>
           </div>
         </div>
@@ -1692,19 +1566,11 @@ onUnmounted(() => {
     </section>
 
     <!-- Pytest Output -->
-    <section
-      v-if="pytestOutput.length > 0"
-      class="rounded-2xl border border-slate-200 bg-white"
-    >
-      <button
-        type="button"
-        class="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
-        @click="showPytestOutput = !showPytestOutput"
-      >
+    <section v-if="pytestOutput.length > 0" class="rounded-2xl border border-slate-200 bg-white">
+      <button type="button" class="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
+        @click="showPytestOutput = !showPytestOutput">
         <div class="flex min-w-0 items-center gap-3">
-          <div
-            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100"
-          >
+          <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100">
             <SlidersHorizontal class="h-4 w-4 text-slate-500" />
           </div>
 
@@ -1717,49 +1583,34 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <ChevronDown
-          class="h-4 w-4 shrink-0 text-slate-400 transition-transform"
-          :class="{
-            'rotate-180': showPytestOutput,
-          }"
-        />
+        <ChevronDown class="h-4 w-4 shrink-0 text-slate-400 transition-transform" :class="{
+          'rotate-180': showPytestOutput,
+        }" />
       </button>
 
       <div v-if="showPytestOutput" class="border-t border-slate-200">
-        <div
-          class="flex items-center justify-end gap-2 border-b border-slate-800 bg-slate-950 px-4 py-2"
-        >
-          <button
-            type="button"
+        <div class="flex items-center justify-end gap-2 border-b border-slate-800 bg-slate-950 px-4 py-2">
+          <button type="button"
             class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-slate-300 transition hover:bg-slate-800 hover:text-white"
-            @click="copyLogs"
-          >
+            @click="copyLogs">
             <Copy class="h-3 w-3" />
             Copy
           </button>
 
-          <button
-            type="button"
+          <button type="button"
             class="rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-slate-300 transition hover:bg-slate-800 hover:text-white"
-            @click="clearOutput"
-          >
+            @click="clearOutput">
             Clear
           </button>
         </div>
 
         <div class="bg-slate-950 p-4">
-          <pre
-            class="max-h-125 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-xs leading-5"
-          ><span
-            v-for="(output, index) in pytestOutput"
-            :key="index"
-            :class="
-              output.stream === 'stderr'
-                ? 'text-rose-300'
-                : 'text-slate-300'
-            "
-          >{{ output.line }}
-{{ "\n" }}</span></pre>
+          <pre class="max-h-125 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-xs leading-5"><span
+          v-for="output in pytestOutput" :key="output.logId" :class="output.stream === 'stderr'
+            ? 'text-rose-300'
+            : 'text-slate-300'
+            ">{{ output.line }}
+          {{ "\n" }}</span></pre>
         </div>
       </div>
     </section>
