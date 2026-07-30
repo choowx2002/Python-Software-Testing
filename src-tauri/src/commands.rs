@@ -650,6 +650,7 @@ pub struct TestFinishedEvent {
 #[tauri::command]
 pub async fn run_tests(
     app_handle: AppHandle,
+    project_id: i64,
     project_path: String,
     interpreter_path: String,
     test_cases: Vec<String>,
@@ -774,6 +775,22 @@ pub async fn run_tests(
     let passed = results.iter().filter(|r| r.status == "passed").count();
     let failed = results.iter().filter(|r| r.status == "failed").count();
     let skipped = results.iter().filter(|r| r.status == "skipped").count();
+
+
+    test_execution_repository::insert_execution_history(
+        db,
+        NewExecutionHistory {
+            project_id,
+            execution_type,
+            execution_status,
+            command,
+            total_tests: results.len(),
+            passed: passed,
+            failed: failed,
+            skipped: skipped,
+            execution_time,
+        },
+    )?;
 
     let _ = app_handle.emit(
         "test-finished",

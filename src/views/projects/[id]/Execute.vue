@@ -681,7 +681,8 @@ async function runTests() {
   resetExecutionState();
 
   try {
-    await invoke<string>("run_tests", {
+    await invoke("run_tests", {
+      projectId: currentProject.value!.id,
       projectPath,
       interpreterPath,
       testCases: targets,
