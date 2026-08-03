@@ -18,6 +18,10 @@ pub fn run() {
             commands::validate_project_directory,
             commands::create_virtual_env,
             commands::open_in_file_manager,
+            commands::scan_source_files,
+            commands::generate_tests,
+            commands::open_file,
+            commands::reveal_in_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
