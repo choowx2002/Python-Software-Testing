@@ -24,12 +24,14 @@ import {
   XCircle,
 } from "@lucide/vue";
 import { useProjectStore } from "../../../stores/projectStore";
-import { getDatabase } from "../../../utils/db";
+
 import TreeItem from "../../../components/TreeItem.vue";
+import { useI18n } from "vue-i18n";
 
 const route = useRoute();
 const router = useRouter();
 const projectStore = useProjectStore();
+const { t } = useI18n();
 
 const projectId = computed(() => Number(route.params.id));
 
@@ -340,13 +342,13 @@ const canRun = computed(() => {
 const statusText = computed(() => {
   switch (coverageStatus.value) {
     case "running":
-      return "Running";
+      return t("coverage.status.running");
     case "completed":
-      return "Completed";
+      return t("coverage.status.completed");
     case "failed":
-      return "Failed";
+      return t("coverage.status.failed");
     default:
-      return "Ready";
+      return t("coverage.status.ready");
   }
 });
 
@@ -535,8 +537,8 @@ async function setupCoverageListeners() {
           runId: event.payload.runId,
           stream: "stderr",
           line: event.payload.summary
-            ? "\n[警告] 测试存在失败项，但覆盖率数据已生成（summary 可用）。"
-            : "\n[系统警告] 覆盖率进程异常退出，未生成有效的 coverage.json。请检查上方的日志。",
+            ? t("coverage.logs.warningWithSummary")
+            : t("coverage.logs.systemWarning"),
           logId: logCounter++,
         });
 
@@ -555,7 +557,7 @@ async function setupCoverageListeners() {
       coverageOutput.value.push({
         runId: event.payload.runId,
         stream: "stderr",
-        line: `\n[Coverage Error] ${event.payload.message}`,
+        line: t("coverage.logs.coverageError", { msg: event.payload.message }),
         logId: logCounter++,
       });
       showCoverageLog.value = true;
@@ -651,7 +653,7 @@ async function installCoverage() {
   if (!interpreterPath || installingCoverage.value) return;
 
   installingCoverage.value = true;
-  installMessage.value = "正在安装 coverage.py ...";
+  installMessage.value = t("coverage.installMessage.installing");
 
   try {
     const result = await invoke<{
@@ -664,16 +666,18 @@ async function installCoverage() {
     });
 
     if (result.success) {
-      installMessage.value = "✅ coverage.py 安装成功";
+      installMessage.value = t("coverage.installMessage.success");
       await checkCoverageInstalled();
     } else {
-      installMessage.value = `❌ 安装失败: ${result.failed.join(", ")}`;
+      installMessage.value = t("coverage.installMessage.failed", {
+        packages: result.failed.join(", "),
+      });
     }
   } catch (error) {
     console.error("[Coverage] install_dependencies failed:", error);
-    installMessage.value = `❌ 安装失败: ${
-      error instanceof Error ? error.message : String(error)
-    }`;
+    installMessage.value = t("coverage.installMessage.failedDetail", {
+      msg: error instanceof Error ? error.message : String(error),
+    });
   } finally {
     installingCoverage.value = false;
   }
@@ -713,7 +717,7 @@ async function runCoverage() {
     coverageOutput.value.push({
       runId: currentRunId.value ?? "local",
       stream: "stderr",
-      line: `\n[Fatal Error] 覆盖率执行启动失败: ${errorMsg}`,
+      line: t("coverage.logs.fatalStart", { msg: errorMsg }),
       logId: logCounter++,
     });
     showCoverageLog.value = true;
@@ -735,33 +739,27 @@ function resetRunState() {
 
 /**
  * 将覆盖率摘要持久化到本地 SQLite 数据库（coverage_results 表）
+ * NFR008：走 Rust 类型化命令
  */
 async function saveCoverageToDb(payload: CoverageFinishedEvent) {
   if (!currentProject.value?.id) return;
   if (!payload.summary) return;
 
   try {
-    const db = await getDatabase();
     const runSummary = payload.summary;
     const coveredFileCount = runSummary.files.filter(
       (f) => f.percentCovered > 0,
     ).length;
 
-    await db.execute(
-      `INSERT INTO coverage_results
-       (project_id, execution_id, total_statement_coverage, total_branch_coverage,
-        file_count, covered_file_count, detail_json_path)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [
-        currentProject.value.id,
-        null, // 当前覆盖率运行未关联 test_execution_history
-        runSummary.percentCovered,
-        null, // 未启用 --branch，暂无分支覆盖率数据
-        runSummary.files.length,
-        coveredFileCount,
-        runSummary.jsonPath,
-      ],
-    );
+    await invoke("save_coverage_result", {
+      projectId: currentProject.value.id,
+      executionId: null, // 当前覆盖率运行未关联 test_execution_history
+      totalStatementCoverage: runSummary.percentCovered,
+      totalBranchCoverage: null, // 未启用 --branch，暂无分支覆盖率数据
+      fileCount: runSummary.files.length,
+      coveredFileCount,
+      detailJsonPath: runSummary.jsonPath,
+    });
     console.log("[DB] ✅ Coverage summary saved successfully");
   } catch (error) {
     console.error("[DB] ❌ Failed to save coverage summary:", error);
@@ -824,12 +822,12 @@ async function exportReport(format: "json" | "csv") {
       projectId: projectId.value,
       format,
     });
-    exportMessage.value = `报告已保存到: ${savedPath}`;
+    exportMessage.value = t("coverage.export.saved", { path: savedPath });
   } catch (error) {
     console.error("[Coverage] export_coverage_report failed:", error);
-    exportMessage.value = `导出失败: ${
-      error instanceof Error ? error.message : String(error)
-    }`;
+    exportMessage.value = t("coverage.export.failed", {
+      msg: error instanceof Error ? error.message : String(error),
+    });
   } finally {
     exporting.value = null;
   }
@@ -942,14 +940,14 @@ onUnmounted(() => {
 
           <div class="min-w-0">
             <h1 class="text-lg font-semibold text-slate-900">
-              Coverage
+              {{ t("coverage.title") }}
             </h1>
 
             <p class="mt-0.5 truncate text-xs text-slate-500">
               {{
                 currentProject?.name
-                  ? `Measure test coverage for ${currentProject.name}`
-                  : "Measure test coverage with coverage.py"
+                  ? t("coverage.subtitle", { name: currentProject.name })
+                  : t("coverage.subtitle", { name: t("layout.notLoaded") })
               }}
             </p>
           </div>
@@ -979,7 +977,7 @@ onUnmounted(() => {
 
       <div class="min-w-0 flex-1">
         <div class="text-xs font-semibold text-rose-800">
-          Coverage Error
+          {{ t("coverage.errorTitle") }}
         </div>
 
         <pre
@@ -992,7 +990,7 @@ onUnmounted(() => {
         class="rounded-lg px-2 py-1 text-[11px] font-medium text-rose-600 transition hover:bg-rose-100"
         @click="errorMessage = null"
       >
-        Dismiss
+        {{ t("common.dismiss") }}
       </button>
     </div>
 
@@ -1006,12 +1004,12 @@ onUnmounted(() => {
             <ListChecks class="h-4 w-4 text-slate-500" />
 
             <h2 class="text-sm font-semibold text-slate-900">
-              Coverage Scope
+              {{ t("coverage.scopeTitle") }}
             </h2>
           </div>
 
           <p class="mt-1 text-xs text-slate-500">
-            Choose source directories to measure and the tests to run.
+            {{ t("coverage.scopeDesc") }}
           </p>
         </div>
 
@@ -1027,7 +1025,7 @@ onUnmounted(() => {
           />
 
           {{
-            isLoadingSources || isLoadingTests ? "Refreshing..." : "Refresh"
+            isLoadingSources || isLoadingTests ? t("common.refreshing") : t("common.refresh")
           }}
         </button>
       </div>
@@ -1046,7 +1044,7 @@ onUnmounted(() => {
               <input
                 v-model="sourceSearch"
                 type="text"
-                placeholder="Search source files..."
+                :placeholder="t('coverage.searchPlaceholder')"
                 :disabled="isRunning"
                 class="w-56 rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-xs text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-sky-400 focus:ring-2 focus:ring-sky-100 disabled:bg-slate-50"
               />
@@ -1059,7 +1057,7 @@ onUnmounted(() => {
                 class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
                 @click="selectAllVisible"
               >
-                Select All
+                {{ t("coverage.selectAll") }}
               </button>
 
               <button
@@ -1068,7 +1066,7 @@ onUnmounted(() => {
                 class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
                 @click="clearSourceSelection"
               >
-                Clear
+                {{ t("coverage.clear") }}
               </button>
             </div>
           </div>
@@ -1077,23 +1075,23 @@ onUnmounted(() => {
             class="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-4 py-2"
           >
             <span class="text-xs font-medium text-slate-600">
-              {{ selectedSourceCount }} selected
+              {{ t("coverage.targetsSelected", { count: selectedSourceCount }) }}
             </span>
 
             <span class="text-xs text-slate-500">
-              派生为 --source 目录
+              {{ t("coverage.derivedSourceHint") }}
             </span>
           </div>
 
           <div v-if="isLoadingSources" class="px-5 py-10 text-center text-sm text-slate-500">
-            Scanning source files...
+            {{ t("coverage.scanningSources") }}
           </div>
 
           <div
             v-else-if="sourceTree.length === 0"
             class="px-5 py-10 text-center text-sm text-slate-500"
           >
-            No source files found.
+            {{ t("coverage.noSourceFiles") }}
           </div>
 
           <div v-else class="max-h-72 overflow-auto">
@@ -1116,7 +1114,7 @@ onUnmounted(() => {
             class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3"
           >
             <span class="text-xs font-medium text-slate-700">
-              Test Files
+              {{ t("coverage.testFiles") }}
               <span class="ml-1 text-slate-400">{{ testFiles.length }}</span>
             </span>
 
@@ -1127,7 +1125,7 @@ onUnmounted(() => {
                 class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
                 @click="selectAllTests"
               >
-                Select All
+                {{ t("coverage.selectAll") }}
               </button>
 
               <button
@@ -1136,7 +1134,7 @@ onUnmounted(() => {
                 class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
                 @click="clearTestSelection"
               >
-                Clear
+                {{ t("coverage.clear") }}
               </button>
             </div>
           </div>
@@ -1145,21 +1143,21 @@ onUnmounted(() => {
             class="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-4 py-2"
           >
             <span class="text-xs font-medium text-slate-600">
-              {{ selectedTestCount }} selected
+              {{ t("coverage.targetsSelected", { count: selectedTestCount }) }}
             </span>
 
-            <span class="text-xs text-slate-500">不选则运行全部测试</span>
+            <span class="text-xs text-slate-500">{{ t("coverage.allTestsHint") }}</span>
           </div>
 
           <div v-if="isLoadingTests" class="px-5 py-10 text-center text-sm text-slate-500">
-            Scanning test files...
+            {{ t("coverage.scanningTests") }}
           </div>
 
           <div
             v-else-if="testFiles.length === 0"
             class="px-5 py-10 text-center text-sm text-slate-500"
           >
-            No test files found.
+            {{ t("coverage.noTestFiles") }}
           </div>
 
           <div v-else class="max-h-72 overflow-auto">
@@ -1222,10 +1220,10 @@ onUnmounted(() => {
           >
             {{
               checkingCoverage
-                ? "checking coverage.py..."
+                ? t("coverage.badge.checking")
                 : coverageInstalled
-                  ? "coverage.py installed"
-                  : "coverage.py not installed"
+                  ? t("coverage.badge.installed")
+                  : t("coverage.badge.notInstalled")
             }}
           </span>
 
@@ -1237,7 +1235,7 @@ onUnmounted(() => {
             @click="installCoverage"
           >
             <Download class="h-3.5 w-3.5" />
-            {{ installingCoverage ? "Installing..." : "Install coverage.py" }}
+            {{ installingCoverage ? t("coverage.installing") : t("coverage.installCoverage") }}
           </button>
 
           <span v-if="installMessage" class="text-[11px] text-slate-500">
@@ -1247,7 +1245,7 @@ onUnmounted(() => {
 
         <div class="flex items-center gap-2">
           <span v-if="coverageInstalled === false && !checkingCoverage" class="text-[11px] text-slate-400">
-            需要先在用户项目的 venv 中安装 coverage.py
+            {{ t("coverage.installHint") }}
           </span>
 
           <button
@@ -1257,7 +1255,7 @@ onUnmounted(() => {
             class="inline-flex cursor-not-allowed items-center gap-2 rounded-xl bg-slate-200 px-5 py-2.5 text-sm font-medium text-slate-500"
           >
             <Square class="h-4 w-4" />
-            Running
+            {{ t("coverage.running") }}
           </button>
 
           <button
@@ -1268,7 +1266,7 @@ onUnmounted(() => {
             @click="runCoverage"
           >
             <Play class="h-4 w-4" />
-            Run Coverage
+            {{ t("coverage.run") }}
           </button>
         </div>
       </div>
@@ -1280,11 +1278,11 @@ onUnmounted(() => {
         <div class="flex items-center justify-between gap-4">
           <div>
             <div class="text-sm font-semibold text-slate-900">
-              Coverage Summary
+              {{ t("coverage.summary.title") }}
             </div>
 
             <div class="mt-1 text-xs text-slate-500">
-              {{ summary.files.length }} files · {{
+              {{ t("coverage.summary.files", { count: summary.files.length }) }} · {{
                 executionDuration.toFixed(2)
               }}s · run {{ summary.runId.slice(0, 8) }}
             </div>
@@ -1298,7 +1296,7 @@ onUnmounted(() => {
               {{ summary.percentCovered.toFixed(1) }}%
             </div>
 
-            <div class="text-[11px] text-slate-400">overall</div>
+            <div class="text-[11px] text-slate-400">{{ t("coverage.summary.overall") }}</div>
           </div>
         </div>
       </div>
@@ -1308,7 +1306,7 @@ onUnmounted(() => {
           class="rounded-xl border p-4"
           :class="cardBorderClass(summary.percentCovered)"
         >
-          <div class="text-xs text-slate-600">Statement Coverage</div>
+          <div class="text-xs text-slate-600">{{ t("coverage.summary.statementCoverage") }}</div>
 
           <div
             class="mt-1 text-xl font-semibold"
@@ -1318,23 +1316,22 @@ onUnmounted(() => {
           </div>
 
           <div class="mt-1 text-[11px] text-slate-500">
-            {{ summary.coveredStatements }} /
-            {{ summary.totalStatements }} statements
+            {{ t("coverage.summary.statements", { covered: summary.coveredStatements, total: summary.totalStatements }) }}
           </div>
         </div>
 
         <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
-          <div class="text-xs text-slate-600">Branch Coverage</div>
+          <div class="text-xs text-slate-600">{{ t("coverage.summary.branchCoverage") }}</div>
 
           <div class="mt-1 text-xl font-semibold text-slate-400">—</div>
 
           <div class="mt-1 text-[11px] text-slate-500">
-            未启用 --branch 参数
+            {{ t("coverage.summary.branchNotEnabled") }}
           </div>
         </div>
 
         <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
-          <div class="text-xs text-slate-600">Files Covered</div>
+          <div class="text-xs text-slate-600">{{ t("coverage.summary.filesCovered") }}</div>
 
           <div class="mt-1 text-xl font-semibold text-slate-900">
             {{ fileStats.covered }}
@@ -1344,7 +1341,7 @@ onUnmounted(() => {
           </div>
 
           <div class="mt-1 text-[11px] text-slate-500">
-            覆盖率 &gt; 0% 的文件数
+            {{ t("coverage.summary.filesCoveredHint") }}
           </div>
         </div>
       </div>
@@ -1372,11 +1369,11 @@ onUnmounted(() => {
           <FileCode2 class="h-4 w-4 text-slate-500" />
 
           <h2 class="text-sm font-semibold text-slate-900">
-            Files
+            {{ t("coverage.fileList.title") }}
           </h2>
 
           <span class="text-xs text-slate-400">
-            {{ displayFiles.length }} shown
+            {{ t("coverage.fileList.shownCount", { count: displayFiles.length }) }}
           </span>
         </div>
 
@@ -1388,16 +1385,16 @@ onUnmounted(() => {
           >
             <ArrowUpDown class="h-3 w-3" />
 
-            {{ sortOrder === "asc" ? "Lowest first" : "Highest first" }}
+            {{ sortOrder === "asc" ? t("coverage.fileList.lowestFirst") : t("coverage.fileList.highestFirst") }}
           </button>
 
           <div class="flex items-center gap-1 rounded-lg border border-slate-200 p-0.5">
             <button
               v-for="option in [
-                { id: 'all', label: `All ${fileStats.total}` },
-                { id: 'high', label: `>80% ${fileStats.high}` },
-                { id: 'mid', label: `50-80% ${fileStats.mid}` },
-                { id: 'low', label: `<50% ${fileStats.low}` },
+                { id: 'all', label: t('coverage.fileList.filter.all', { count: fileStats.total }) },
+                { id: 'high', label: t('coverage.fileList.filter.high', { count: fileStats.high }) },
+                { id: 'mid', label: t('coverage.fileList.filter.mid', { count: fileStats.mid }) },
+                { id: 'low', label: t('coverage.fileList.filter.low', { count: fileStats.low }) },
               ]"
               :key="option.id"
               type="button"
@@ -1416,7 +1413,7 @@ onUnmounted(() => {
       </div>
 
       <div v-if="displayFiles.length === 0" class="px-5 py-10 text-center text-xs text-slate-500">
-        No files match the current filter.
+        {{ t("coverage.fileList.noResults") }}
       </div>
 
       <div v-else class="divide-y divide-slate-100">
@@ -1475,25 +1472,25 @@ onUnmounted(() => {
                   class="ml-2 text-xs"
                   :class="percentTextClass(detail.percentCovered)"
                 >
-                  {{ detail.percentCovered.toFixed(1) }}% covered
+                  {{ detail.percentCovered.toFixed(1) }}% {{ t("coverage.detail.covered") }}
                 </span>
               </div>
 
               <div class="flex shrink-0 items-center gap-3 text-[10px] text-slate-500">
                 <span class="flex items-center gap-1">
-                  <span class="h-2 w-2 rounded-sm bg-emerald-400" /> covered
+                  <span class="h-2 w-2 rounded-sm bg-emerald-400" /> {{ t("coverage.detail.legend.covered") }}
                 </span>
                 <span class="flex items-center gap-1">
-                  <span class="h-2 w-2 rounded-sm bg-rose-400" /> missing
+                  <span class="h-2 w-2 rounded-sm bg-rose-400" /> {{ t("coverage.detail.legend.missing") }}
                 </span>
                 <span class="flex items-center gap-1">
-                  <span class="h-2 w-2 rounded-sm bg-slate-300" /> not executable
+                  <span class="h-2 w-2 rounded-sm bg-slate-300" /> {{ t("coverage.detail.legend.notExecutable") }}
                 </span>
               </div>
             </div>
 
             <div v-if="detailLoading" class="px-5 py-8 text-center text-xs text-slate-500">
-              Loading line details...
+              {{ t("coverage.detail.loading") }}
             </div>
 
             <div
@@ -1529,12 +1526,12 @@ onUnmounted(() => {
     <section v-if="hasResult" class="rounded-2xl border border-slate-200 bg-white">
       <div class="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
         <div class="min-w-0">
-          <div class="text-sm font-semibold text-slate-900">Report</div>
+          <div class="text-sm font-semibold text-slate-900">{{ t("coverage.report.title") }}</div>
 
           <div class="mt-1 truncate text-xs text-slate-500">
             {{
               exportMessage ??
-              (summary ? "Export the cached coverage data or reveal it in the file manager." : "No coverage data yet.")
+              (summary ? t("coverage.report.exportDesc") : t("coverage.report.noData"))
             }}
           </div>
         </div>
@@ -1547,7 +1544,7 @@ onUnmounted(() => {
             @click="exportReport('json')"
           >
             <Download class="h-3.5 w-3.5" />
-            {{ exporting === "json" ? "Exporting..." : "Export JSON" }}
+            {{ exporting === "json" ? t("coverage.export.exporting") : t("coverage.export.json") }}
           </button>
 
           <button
@@ -1557,7 +1554,7 @@ onUnmounted(() => {
             @click="exportReport('csv')"
           >
             <Download class="h-3.5 w-3.5" />
-            {{ exporting === "csv" ? "Exporting..." : "Export CSV" }}
+            {{ exporting === "csv" ? t("coverage.export.exporting") : t("coverage.export.csv") }}
           </button>
 
           <button
@@ -1567,7 +1564,7 @@ onUnmounted(() => {
             @click="openInFileManager"
           >
             <FolderOpen class="h-3.5 w-3.5" />
-            Open in File Manager
+            {{ t("coverage.openInFileManager") }}
           </button>
         </div>
       </div>
@@ -1590,11 +1587,11 @@ onUnmounted(() => {
 
           <div class="min-w-0">
             <div class="text-sm font-medium text-slate-800">
-              Coverage Output
+              {{ t("coverage.outputTitle") }}
             </div>
 
             <div class="mt-1 text-xs text-slate-500">
-              {{ coverageOutput.length }} log lines
+              {{ t("coverage.logLines", { count: coverageOutput.length }) }}
             </div>
           </div>
         </div>
@@ -1615,7 +1612,7 @@ onUnmounted(() => {
             @click="copyLogs"
           >
             <Copy class="h-3 w-3" />
-            Copy
+            {{ t("common.copy") }}
           </button>
 
           <button
@@ -1623,7 +1620,7 @@ onUnmounted(() => {
             class="rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-slate-300 transition hover:bg-slate-800 hover:text-white"
             @click="clearOutput"
           >
-            Clear
+            {{ t("common.clear") }}
           </button>
         </div>
 

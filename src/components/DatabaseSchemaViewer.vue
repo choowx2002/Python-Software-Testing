@@ -14,7 +14,6 @@
  */
 
 import { ref, onMounted } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
 import { getDatabase } from '../utils/db'
 import {
   Database, Table, Key, Type, Check, X,

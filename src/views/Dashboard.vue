@@ -2,7 +2,9 @@
 import { onMounted, computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
+import { useI18n } from "vue-i18n";
 import { useProjectStore } from "../stores/projectStore";
+import { setLocale } from "../i18n";
 import {
   FolderPlus,
   GitBranch,
@@ -14,15 +16,92 @@ import {
   ArrowUpDown,
   Code2,
   Database,
-  Check,
-  AlertCircle,
   X,
   Terminal,
 } from "@lucide/vue";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { ask, open } from "@tauri-apps/plugin-dialog";
 
 const router = useRouter();
 const projectStore = useProjectStore();
+const { t, locale } = useI18n();
+const currentLocale = computed(() => locale.value);
+
+function switchLocale(lang: "en" | "zh") {
+  setLocale(lang);
+}
+
+// Clone Repository 状态
+const showCloneModal = ref(false);
+const cloneUrl = ref("");
+const cloneTargetDir = ref("");
+const isCloning = ref(false);
+const cloneError = ref<string | null>(null);
+
+function openCloneModal() {
+  cloneUrl.value = "";
+  cloneTargetDir.value = "";
+  cloneError.value = null;
+  showCloneModal.value = true;
+}
+
+async function chooseCloneDir() {
+  const selected = await open({
+    directory: true,
+    title: "Choose destination folder",
+  });
+  if (typeof selected === "string") {
+    cloneTargetDir.value = selected;
+  }
+}
+
+async function cloneRepository() {
+  if (!cloneUrl.value.trim() || !cloneTargetDir.value) return;
+
+  isCloning.value = true;
+  cloneError.value = null;
+
+  try {
+    const clonedPath = await invoke<string>("clone_repository", {
+      repoUrl: cloneUrl.value.trim(),
+      targetDir: cloneTargetDir.value,
+    });
+
+    const repoName = clonedPath.split(/[\\/]/).pop() || "Cloned Project";
+
+    // 克隆后自动探测 Python 环境并写入解释器路径
+    let interpreterPath: string | null = null;
+    try {
+      const env = await invoke<{
+        pythonPath: string | null;
+      }>("detect_python_env", { projectPath: clonedPath });
+      interpreterPath = env.pythonPath;
+    } catch (error) {
+      console.error("[Dashboard] detect_python_env failed after clone:", error);
+    }
+
+    // NFR008：写入 projects 表走 Rust 类型化命令（含重复路径拦截）
+    try {
+      await invoke("add_project", {
+        name: repoName,
+        projectPath: clonedPath,
+        interpreterPath: interpreterPath,
+      });
+    } catch (error) {
+      cloneError.value =
+        error instanceof Error ? error.message : String(error);
+      isCloning.value = false;
+      return;
+    }
+
+    await projectStore.fetchProjects();
+    showCloneModal.value = false;
+  } catch (error) {
+    console.error("[Dashboard] Failed to clone repository:", error);
+    cloneError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    isCloning.value = false;
+  }
+}
 
 // 搜索关键词
 const searchQuery = ref("");
@@ -67,20 +146,6 @@ const getStatusTextColor = (status: string) => {
     default:
       return "text-slate-600";
   }
-};
-
-const getEnvIcon = (detail: string) => {
-  if (
-    detail.toLowerCase().includes("missing") ||
-    detail.toLowerCase().includes("not found")
-  )
-    return X;
-  if (
-    detail.toLowerCase().includes("ok") ||
-    detail.toLowerCase().includes("activated")
-  )
-    return Check;
-  return AlertCircle;
 };
 
 // 页面挂载时拉取数据
@@ -140,16 +205,16 @@ const goToImport = () => router.push("/projects/import");
 const goToProject = (id: number) => router.push(`/projects/${id}`);
 
 const handleDelete = async (projectId: number, projectName: string) => {
-  const deleteConfirm = await ask(`Are you sure you want to delete "${projectName}"? This will remove all associated test history.`)
+  const deleteConfirm = await ask(t("dashboard.deleteConfirm", { name: projectName }))
   if (!deleteConfirm) {
     return
   }
 
   try {
     await projectStore.deleteProject(projectId)
-    console.log('Project deleted successfully')
+    console.log(t("dashboard.deleteSuccess"))
   } catch (error) {
-    console.error('Failed to delete project', error)
+    console.error(t("dashboard.deleteFailed"), error)
   }
 }
 </script>
@@ -173,7 +238,7 @@ const handleDelete = async (projectId: number, projectName: string) => {
 
       <div class="px-4 flex-1">
         <p class="px-2 text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2">
-          Quick Actions
+          {{ t("dashboard.quickActions") }}
         </p>
         <div class="space-y-0.5">
           <button @click="goToImport"
@@ -184,13 +249,13 @@ const handleDelete = async (projectId: number, projectName: string) => {
             </div>
             <div>
               <p class="text-[13px] font-medium text-slate-800">
-                Import Project
+                {{ t("dashboard.importProject") }}
               </p>
-              <p class="text-[10px] text-slate-500">Open local directory</p>
+              <p class="text-[10px] text-slate-500">{{ t("dashboard.importProjectDesc") }}</p>
             </div>
           </button>
 
-          <button
+          <button @click="openCloneModal"
             class="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left group active:scale-[0.99]">
             <div
               class="w-7 h-7 bg-blue-50 rounded-md flex items-center justify-center group-hover:bg-blue-100 transition-colors">
@@ -198,9 +263,9 @@ const handleDelete = async (projectId: number, projectName: string) => {
             </div>
             <div>
               <p class="text-[13px] font-medium text-slate-800">
-                Clone Repository
+                {{ t("dashboard.cloneRepository") }}
               </p>
-              <p class="text-[10px] text-slate-500">Get from Git remote</p>
+              <p class="text-[10px] text-slate-500">{{ t("dashboard.cloneRepositoryDesc") }}</p>
             </div>
           </button>
 
@@ -212,7 +277,7 @@ const handleDelete = async (projectId: number, projectName: string) => {
             </div>
             <div>
               <p class="text-[13px] font-medium text-slate-800">
-                AI Test Generator
+                {{ t("dashboard.aiTestGenerator") }}
               </p>
               <p class="text-[10px] text-slate-500">Powered by Pynguin</p>
             </div>
@@ -244,10 +309,22 @@ const handleDelete = async (projectId: number, projectName: string) => {
         </button>
       </div>
 
-      <div class="px-6 py-4 border-t border-zinc-200/80">
+      <div class="px-6 py-4 border-t border-zinc-200/80 flex items-center justify-between gap-2">
         <p class="text-[10px] text-slate-400 font-mono">
           v1.2.0 · Build 2024.3
         </p>
+        <div class="flex items-center gap-1 rounded-md border border-zinc-200 p-0.5">
+          <button
+            v-for="lang in ['en', 'zh'] as const"
+            :key="lang"
+            type="button"
+            class="px-1.5 py-0.5 text-[10px] font-medium rounded transition"
+            :class="currentLocale === lang ? 'bg-emerald-500 text-white' : 'text-slate-500 hover:bg-slate-100'"
+            @click="switchLocale(lang)"
+          >
+            {{ lang === "en" ? "EN" : "中文" }}
+          </button>
+        </div>
       </div>
     </aside>
 
@@ -256,7 +333,7 @@ const handleDelete = async (projectId: number, projectName: string) => {
       <!-- Toolbar -->
       <div class="h-14 px-6 flex items-center justify-between border-b border-zinc-200/80 bg-white">
         <div class="flex items-center gap-3">
-          <h2 class="text-sm font-semibold text-slate-800">Projects</h2>
+          <h2 class="text-sm font-semibold text-slate-800">{{ t("dashboard.projectsTitle") }}</h2>
           <span class="px-1.5 py-0.5 bg-slate-100 text-slate-500 text-[10px] font-mono rounded">
             {{ projectStore.projects.length }}
           </span>
@@ -264,18 +341,18 @@ const handleDelete = async (projectId: number, projectName: string) => {
         <div class="flex items-center gap-2">
           <div class="relative">
             <Search class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-            <input v-model="searchQuery" type="text" placeholder="Search projects..."
+            <input v-model="searchQuery" type="text" :placeholder="t('dashboard.searchPlaceholder')"
               class="pl-8 pr-3 py-1.5 bg-slate-50 border border-zinc-200/80 rounded-md text-xs w-56 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/40 transition-all" />
           </div>
           <button
             class="flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-zinc-200/80 rounded-md text-xs text-slate-600 hover:bg-slate-50 transition-all active:scale-[0.98]">
             <SlidersHorizontal class="w-3.5 h-3.5" />
-            <span>Filter</span>
+            <span>{{ t("dashboard.filter") }}</span>
           </button>
           <button
             class="flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-zinc-200/80 rounded-md text-xs text-slate-600 hover:bg-slate-50 transition-all active:scale-[0.98]">
             <ArrowUpDown class="w-3.5 h-3.5" />
-            <span>Last Opened</span>
+            <span>{{ t("dashboard.sortLastOpened") }}</span>
           </button>
         </div>
       </div>
@@ -285,7 +362,7 @@ const handleDelete = async (projectId: number, projectName: string) => {
         <!-- Empty State (当没有项目或搜索无结果时) -->
         <div v-if="projectStore.isLoading" class="flex flex-col items-center justify-center h-full text-slate-400">
           <div class="w-8 h-8 border-2 border-slate-200 border-t-emerald-500 rounded-full animate-spin mb-3"></div>
-          <p class="text-sm">Loading projects...</p>
+          <p class="text-sm">{{ t("dashboard.loadingProjects") }}</p>
         </div>
 
         <div v-else-if="filteredProjects.length === 0"
@@ -294,16 +371,16 @@ const handleDelete = async (projectId: number, projectName: string) => {
           <p class="text-sm font-medium text-slate-600 mb-1">
             {{
               searchQuery
-                ? "No projects match your search"
-                : "No projects imported yet"
+                ? t("dashboard.emptyState.searchNoMatch")
+                : t("dashboard.emptyState.title")
             }}
           </p>
           <p class="text-xs mb-4">
-            Get started by importing a local Python directory.
+            {{ t("dashboard.emptyState.description") }}
           </p>
           <button @click="goToImport"
             class="px-4 py-2 bg-emerald-500 text-white text-xs font-medium rounded-md hover:bg-emerald-600 transition-colors active:scale-[0.98]">
-            Import Project
+            {{ t("dashboard.importProject") }}
           </button>
         </div>
 
@@ -312,11 +389,11 @@ const handleDelete = async (projectId: number, projectName: string) => {
           <!-- Table Header -->
           <div
             class="px-6 py-2 bg-slate-50 border-b border-zinc-200/80 grid grid-cols-[4fr_1.5fr_2fr_2.5fr_1.5fr] gap-4 text-[10px] font-semibold text-slate-400 uppercase tracking-wider sticky top-0 z-10">
-            <div>Project</div>
-            <div>Environment</div>
-            <div>Last Test Result</div>
-            <div>Coverage</div>
-            <div class="text-right">Last Run</div>
+            <div>{{ t("dashboard.projectTable.project") }}</div>
+            <div>{{ t("dashboard.projectTable.environment") }}</div>
+            <div>{{ t("dashboard.projectTable.testsPassed") }}</div>
+            <div>{{ t("dashboard.projectTable.coverage") }}</div>
+            <div class="text-right">{{ t("dashboard.projectTable.lastRun") }}</div>
           </div>
 
           <!-- Rows -->
@@ -371,9 +448,9 @@ const handleDelete = async (projectId: number, projectName: string) => {
 
               <!-- Test Result -->
               <div class="flex items-center gap-2">
-                <span class="text-[11px] font-mono text-emerald-600">{{ project.tests_passed }} passed</span>
+                <span class="text-[11px] font-mono text-emerald-600">{{ t("dashboard.passedCount", { count: project.tests_passed }) }}</span>
                 <span class="text-slate-300">·</span>
-                <span class="text-[11px] font-mono text-rose-600">{{ project.tests_failed }} failed</span>
+                <span class="text-[11px] font-mono text-rose-600">{{ t("dashboard.failedCount", { count: project.tests_failed }) }}</span>
               </div>
 
               <!-- Coverage -->
@@ -388,7 +465,7 @@ const handleDelete = async (projectId: number, projectName: string) => {
               <!-- Last Run -->
               <div class="text-right">
                 <span class="text-[11px] text-slate-500">{{
-                  project.last_run ?? "Never"
+                  project.last_run ?? t("common.never")
                 }}</span>
               </div>
             </div>
@@ -405,19 +482,78 @@ const handleDelete = async (projectId: number, projectName: string) => {
             <span class="font-mono">{{
               pythonVersion
                 ? `${pythonVersion}${pythonVenv ? " (venv)" : " (global)"}`
-                : "Python not detected"
+                : t("app.statusBar.pythonNotDetected")
             }}</span>
           </div>
           <div class="flex items-center gap-1.5">
             <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>
-            <span>Tauri IPC: Connected</span>
+            <span>{{ t("app.statusBar.ipcConnected") }}</span>
           </div>
         </div>
         <div class="flex items-center gap-4 font-mono">
-          <span>{{ projectStore.stats.total_projects }} Projects</span>
-          <span>{{ projectStore.stats.total_runs }} Total Runs</span>
+          <span>{{ t("app.statusBar.projects", { count: projectStore.stats.total_projects }) }}</span>
+          <span>{{ t("app.statusBar.totalRuns", { count: projectStore.stats.total_runs }) }}</span>
         </div>
       </div>
     </main>
+
+    <!-- Clone Repository Modal -->
+    <div v-if="showCloneModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+      @click.self="showCloneModal = false">
+      <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h3 class="text-sm font-semibold text-slate-900">{{ t("dashboard.cloneModal.title") }}</h3>
+
+            <p class="mt-1 text-xs text-slate-500">
+              {{ t("dashboard.cloneModal.description") }}
+            </p>
+          </div>
+
+          <button type="button" class="rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+            @click="showCloneModal = false">
+            <X class="h-4 w-4" />
+          </button>
+        </div>
+
+        <label class="mt-4 block text-xs font-medium text-slate-700">
+          {{ t("dashboard.cloneModal.repoUrl") }}
+          <input v-model="cloneUrl" type="text" :placeholder="t('dashboard.cloneModal.repoUrlPlaceholder')"
+            class="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            @keyup.enter="cloneRepository" />
+        </label>
+
+        <label class="mt-4 block text-xs font-medium text-slate-700">
+          {{ t("dashboard.cloneModal.destFolder") }}
+          <button type="button"
+            class="mt-1.5 flex w-full items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm transition hover:bg-slate-50"
+            @click="chooseCloneDir">
+            <span :class="cloneTargetDir ? 'text-slate-700' : 'text-slate-400'">
+              {{ cloneTargetDir || t("dashboard.cloneModal.chooseFolder") }}
+            </span>
+            <FolderPlus class="h-4 w-4 shrink-0 text-slate-400" />
+          </button>
+        </label>
+
+        <div v-if="cloneError" class="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700">
+          {{ cloneError }}
+        </div>
+
+        <div class="mt-5 flex items-center justify-end gap-2">
+          <button type="button"
+            class="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100"
+            @click="showCloneModal = false">
+            {{ t("common.cancel") }}
+          </button>
+
+          <button type="button" :disabled="!cloneUrl.trim() || !cloneTargetDir || isCloning"
+            class="inline-flex items-center gap-2 rounded-xl bg-blue-500 px-5 py-2 text-sm font-medium text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+            @click="cloneRepository">
+            <GitBranch class="h-4 w-4" />
+            {{ isCloning ? t("dashboard.cloneModal.cloning") : t("dashboard.cloneModal.cloneImport") }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getDatabase } from '../utils/db' // 确保路径正确
+import { invoke } from '@tauri-apps/api/core'
 
 export interface Project {
   id: number
@@ -33,66 +33,48 @@ export const useProjectStore = defineStore('project', () => {
 
   // ==========================================
   // 1. 获取项目列表（附带真实统计：执行历史 + 覆盖率）
+  //    聚合查询由 Rust 端执行（NFR008：前端不直连裸 SQL）
   // ==========================================
   const fetchProjects = async () => {
     isLoading.value = true
     try {
-      const db = await getDatabase()
-
-      // 每个项目附带：
-      // - tests_passed / tests_failed：test_execution_history 的累计通过/失败数
-      // - last_run：最近一次执行时间（无记录时为 NULL，前端显示 "Never"）
-      // - coverage：coverage_results 中该项目最新一条的语句覆盖率
-      const rows = await db.select<any[]>(`
-        SELECT
-          p.id,
-          p.name,
-          p.project_path AS path,
-          p.interpreter_path,
-          p.status AS env_status,
-          p.created_at,
-          COALESCE((SELECT SUM(passed) FROM test_execution_history t WHERE t.project_id = p.id), 0) AS tests_passed,
-          COALESCE((SELECT SUM(failed) FROM test_execution_history t WHERE t.project_id = p.id), 0) AS tests_failed,
-          (SELECT MAX(executed_at) FROM test_execution_history t WHERE t.project_id = p.id) AS last_run,
-          COALESCE((SELECT c.total_statement_coverage
-                     FROM coverage_results c
-                     WHERE c.project_id = p.id
-                     ORDER BY c.id DESC LIMIT 1), 0) AS coverage
-        FROM projects p
-        ORDER BY p.created_at DESC
-      `)
+      const rows = await invoke<
+        {
+          id: number
+          name: string
+          path: string
+          interpreterPath: string | null
+          envStatus: string
+          testsPassed: number
+          testsFailed: number
+          coverage: number
+          lastRun: string | null
+        }[]
+      >("get_projects")
 
       projects.value = rows.map(row => ({
         id: row.id,
         name: row.name,
         path: row.path,
-        interpreter_path: row.interpreter_path,
-        env_status: row.env_status || 'Warning',
-        tests_passed: Number(row.tests_passed) || 0,
-        tests_failed: Number(row.tests_failed) || 0,
+        interpreter_path: row.interpreterPath,
+        env_status: (row.envStatus || 'Warning') as Project['env_status'],
+        tests_passed: Number(row.testsPassed) || 0,
+        tests_failed: Number(row.testsFailed) || 0,
         coverage: Number(row.coverage) || 0,
-        last_run: row.last_run ?? null,
+        last_run: row.lastRun ?? null,
       }))
 
-      // 全局统计：总执行次数、平均通过率、平均覆盖率（每个项目取最新一条覆盖率）
-      const statsRows = await db.select<any[]>(`
-        SELECT
-          (SELECT COUNT(*) FROM test_execution_history) AS total_runs,
-          COALESCE((SELECT AVG(
-            CASE WHEN (passed + failed + skipped) > 0
-              THEN passed * 100.0 / (passed + failed + skipped)
-              ELSE NULL END
-          ) FROM test_execution_history), 0) AS avg_pass_rate,
-          COALESCE((SELECT AVG(c.total_statement_coverage)
-            FROM coverage_results c
-            WHERE c.id IN (SELECT MAX(id) FROM coverage_results GROUP BY project_id)), 0) AS avg_coverage
-      `)
+      const totalRuns = await invoke<number>("count_execution_history")
+      const statsRows = await invoke<{
+        avgPassRate: number
+        avgCoverage: number
+      }>("get_global_stats")
 
       stats.value = {
         total_projects: projects.value.length,
-        total_runs: Number(statsRows[0]?.total_runs) || 0,
-        avg_pass_rate: Number(statsRows[0]?.avg_pass_rate) || 0,
-        avg_coverage: Number(statsRows[0]?.avg_coverage) || 0,
+        total_runs: totalRuns,
+        avg_pass_rate: statsRows.avgPassRate || 0,
+        avg_coverage: statsRows.avgCoverage || 0,
       }
     } catch (error) {
       console.error('[Store] ❌ Failed to fetch projects:', error)
@@ -105,15 +87,8 @@ export const useProjectStore = defineStore('project', () => {
 
   const updateLastOpened = async (projectId: number) => {
     try {
-      const db = await getDatabase()
-      await db.execute(
-        `UPDATE projects SET last_opened_at = CURRENT_TIMESTAMP WHERE id = ?`,
-        [projectId]
-      )
+      await invoke("update_last_opened", { projectId })
       console.log(`[Store] ✅ Updated last_opened_at for project ${projectId}`)
-
-      // 可选：如果你想在本地状态中也体现，可以在这里更新，
-      // 但通常下次 fetchProjects 时会自然同步。
     } catch (error) {
       console.error(`[Store] ❌ Failed to update last opened for project ${projectId}:`, error)
       throw error
@@ -122,11 +97,7 @@ export const useProjectStore = defineStore('project', () => {
 
   const updateProject = async (projectId: number, newName: string) => {
     try {
-      const db = await getDatabase()
-      await db.execute(
-        `UPDATE projects SET name = ? WHERE id = ?`,
-        [newName, projectId]
-      )
+      await invoke("update_project_name", { projectId, newName })
 
       // 立即同步更新本地 Pinia 状态，无需重新请求数据库，UI 会瞬间响应
       const projectIndex = projects.value.findIndex(p => p.id === projectId)
@@ -144,12 +115,7 @@ export const useProjectStore = defineStore('project', () => {
 
   const deleteProject = async (projectId: number) => {
     try {
-      const db = await getDatabase()
-
-      await db.execute(
-        `DELETE FROM projects WHERE id = ?`,
-        [projectId]
-      )
+      await invoke("delete_project", { projectId })
 
       projects.value = projects.value.filter(p => p.id !== projectId)
 

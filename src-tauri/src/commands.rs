@@ -1,3 +1,4 @@
+use crate::state::{process_alive, terminate_pid, AppState};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -468,10 +469,6 @@ pub fn collect_test_cases(project_path: String) -> Result<Vec<TestCase>, String>
 
     let python = find_project_python(&project)?;
 
-    let python_root = project
-        .parent()
-        .ok_or("Failed to determine project parent directory")?;
-
     let output = Command::new(&python)
         .current_dir(&project)
         .env(
@@ -624,18 +621,6 @@ pub struct TestStartedEvent {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TestProgressEvent {
-    pub run_id: String,
-    pub completed: usize,
-    pub total: usize,
-    pub passed: usize,
-    pub failed: usize,
-    pub skipped: usize,
-    pub current_test: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct TestResult {
     pub id: String,
     pub name: String,
@@ -657,6 +642,8 @@ pub struct TestFinishedEvent {
     pub skipped: usize,
     pub results: Vec<TestResult>,
     pub command: String,
+    pub execution_type: String,
+    pub regression_suite_id: Option<i64>,
 }
 
 #[tauri::command]
@@ -667,8 +654,36 @@ pub async fn run_tests(
     interpreter_path: String,
     test_cases: Vec<String>,
     pytest_args: Vec<String>,
+    regression_suite_id: Option<i64>,
+) -> Result<String, String> {
+    run_tests_core(
+        app_handle,
+        project_id,
+        project_path,
+        interpreter_path,
+        test_cases,
+        pytest_args,
+        regression_suite_id,
+    )
+    .await
+}
+
+#[allow(unused_variables)]
+async fn run_tests_core(
+    app_handle: AppHandle,
+    project_id: i64,
+    project_path: String,
+    interpreter_path: String,
+    test_cases: Vec<String>,
+    pytest_args: Vec<String>,
+    regression_suite_id: Option<i64>,
 ) -> Result<String, String> {
     let run_id = Uuid::new_v4().to_string();
+    let execution_type = if regression_suite_id.is_some() {
+        "REGRESSION"
+    } else {
+        "MANUAL"
+    };
     let project = PathBuf::from(&project_path);
     if !project.exists() {
         return Err(format!("Project path does not exist: {}", project_path));
@@ -710,9 +725,6 @@ pub async fn run_tests(
     }
 
     let start = std::time::Instant::now();
-    let python_root = project
-        .parent()
-        .ok_or("Failed to determine project parent directory")?;
 
     let mut child = match AsyncCommand::new(&interpreter)
         .current_dir(&project)
@@ -738,6 +750,8 @@ pub async fn run_tests(
                 skipped: 0,
                 results: vec![],
                 command: command_str.clone(),
+                execution_type: execution_type.to_string(),
+                regression_suite_id,
             });
             return Err(format!("Failed to start pytest: {}", e));
         }
@@ -745,6 +759,8 @@ pub async fn run_tests(
 
     let stdout = child.stdout.take().ok_or_else(|| "Failed to capture pytest stdout".to_string())?;
     let stderr = child.stderr.take().ok_or_else(|| "Failed to capture pytest stderr".to_string())?;
+
+    register_run(&app_handle, &run_id, child.id().unwrap_or(0));
 
     let stdout_handle = app_handle.clone();
     let stdout_run_id = run_id.clone();
@@ -774,7 +790,14 @@ pub async fn run_tests(
         }
     });
 
-    let status = child.wait().await.map_err(|e| format!("Failed waiting for pytest: {}", e))?;
+    let status = match child.wait().await {
+        Ok(s) => s,
+        Err(e) => {
+            unregister_run(&app_handle, &run_id);
+            return Err(format!("Failed waiting for pytest: {}", e));
+        }
+    };
+    unregister_run(&app_handle, &run_id);
     let _ = stdout_task.await;
     let _ = stderr_task.await;
     let duration = start.elapsed().as_secs_f64();
@@ -803,11 +826,214 @@ pub async fn run_tests(
             skipped,
             results,
             command: command_str,
+            execution_type: execution_type.to_string(),
+            regression_suite_id,
         },
     );
 
     let _ = std::fs::remove_file(junit_path);
     Ok(run_id)
+}
+
+// ============================================
+// Command: Regression Suites (FR007)
+// ============================================
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RegressionSuite {
+    pub id: i64,
+    pub project_id: i64,
+    pub suite_name: String,
+    pub target_paths: Vec<String>,
+    pub custom_params: Option<Vec<String>>,
+    pub created_at: String,
+}
+
+/// 将当前执行参数保存为回归套件（FR007）
+#[tauri::command]
+pub async fn save_regression_suite(
+    app: tauri::AppHandle,
+    project_id: i64,
+    suite_name: String,
+    target_paths: Vec<String>,
+    custom_params: Option<Vec<String>>,
+) -> Result<i64, String> {
+    if suite_name.trim().is_empty() {
+        return Err("Suite name must not be empty.".to_string());
+    }
+    let db = crate::db::pool(&app).await?;
+    let targets = serde_json::to_string(&target_paths).map_err(|e| e.to_string())?;
+    let params = custom_params.map(|p| serde_json::to_string(&p).unwrap_or_else(|_| "[]".into()));
+
+    let result = sqlx::query(
+        "INSERT INTO regression_suites (project_id, suite_name, target_paths, custom_params) VALUES (?, ?, ?, ?)",
+    )
+    .bind(project_id)
+    .bind(suite_name.trim().to_string())
+    .bind(targets)
+    .bind(params)
+    .execute(&db)
+    .await
+    .map_err(|e| format!("Failed to save regression suite: {}", e))?;
+
+    Ok(result.last_insert_rowid())
+}
+
+/// 列出某项目下的全部回归套件
+#[tauri::command]
+pub async fn list_regression_suites(
+    app: tauri::AppHandle,
+    project_id: i64,
+) -> Result<Vec<RegressionSuite>, String> {
+    use sqlx::Row;
+    let db = crate::db::pool(&app).await?;
+    let rows = sqlx::query(
+        "SELECT id, project_id, suite_name, target_paths, custom_params, COALESCE(created_at, '') AS created_at FROM regression_suites WHERE project_id = ? ORDER BY id DESC",
+    )
+    .bind(project_id)
+    .fetch_all(&db)
+    .await
+    .map_err(|e| format!("Failed to list regression suites: {}", e))?;
+
+    rows.into_iter()
+        .map(|row| {
+            let id: i64 = row.try_get("id").map_err(|e| e.to_string())?;
+            let project_id: i64 = row.try_get("project_id").map_err(|e| e.to_string())?;
+            let suite_name: String = row.try_get("suite_name").map_err(|e| e.to_string())?;
+            let targets: String = row.try_get("target_paths").map_err(|e| e.to_string())?;
+            let params: Option<String> =
+                row.try_get("custom_params").map_err(|e| e.to_string())?;
+            let created_at: String = row.try_get("created_at").map_err(|e| e.to_string())?;
+
+            Ok(RegressionSuite {
+                id,
+                project_id,
+                suite_name,
+                target_paths: serde_json::from_str(&targets).unwrap_or_default(),
+                custom_params: params
+                    .and_then(|p| serde_json::from_str(&p).ok())
+                    .filter(|v: &Vec<String>| !v.is_empty()),
+                created_at,
+            })
+        })
+        .collect()
+}
+
+/// 删除回归套件
+#[tauri::command]
+pub async fn delete_regression_suite(
+    app: tauri::AppHandle,
+    suite_id: i64,
+) -> Result<(), String> {
+    let db = crate::db::pool(&app).await?;
+    sqlx::query("DELETE FROM regression_suites WHERE id = ?")
+        .bind(suite_id)
+        .execute(&db)
+        .await
+        .map_err(|e| format!("Failed to delete regression suite: {}", e))?;
+    Ok(())
+}
+
+/// 一键重跑回归套件：加载套件参数并复用 run_tests_core（FR007）
+#[tauri::command]
+pub async fn run_regression_suite(
+    app: tauri::AppHandle,
+    suite_id: i64,
+) -> Result<String, String> {
+    use sqlx::Row;
+    let db = crate::db::pool(&app).await?;
+
+    let row = sqlx::query(
+        "SELECT project_id, target_paths, custom_params FROM regression_suites WHERE id = ?",
+    )
+    .bind(suite_id)
+    .fetch_optional(&db)
+    .await
+    .map_err(|e| format!("Failed to load regression suite: {}", e))?
+    .ok_or_else(|| "Regression suite not found.".to_string())?;
+
+    let project_id: i64 = row.try_get("project_id").map_err(|e| e.to_string())?;
+    let targets: String = row.try_get("target_paths").map_err(|e| e.to_string())?;
+    let params: Option<String> = row.try_get("custom_params").map_err(|e| e.to_string())?;
+    let target_paths: Vec<String> = serde_json::from_str(&targets).map_err(|e| e.to_string())?;
+    let pytest_args: Vec<String> = params
+        .and_then(|p| serde_json::from_str(&p).ok())
+        .unwrap_or_default();
+
+    let project_row = sqlx::query("SELECT project_path, interpreter_path FROM projects WHERE id = ?")
+        .bind(project_id)
+        .fetch_optional(&db)
+        .await
+        .map_err(|e| format!("Failed to load project: {}", e))?
+        .ok_or_else(|| "Project not found for regression suite.".to_string())?;
+    let project_path: String = project_row
+        .try_get("project_path")
+        .map_err(|e| e.to_string())?;
+    let interpreter_path: Option<String> = project_row
+        .try_get("interpreter_path")
+        .map_err(|e| e.to_string())?;
+    let interpreter_path = interpreter_path
+        .ok_or_else(|| "Project has no Python interpreter configured.".to_string())?;
+
+    run_tests_core(
+        app.clone(),
+        project_id,
+        project_path,
+        interpreter_path,
+        target_paths,
+        pytest_args,
+        Some(suite_id),
+    )
+    .await
+}
+
+// ============================================
+// Command: Cancel Run
+// ============================================
+
+/// 取消一个正在运行的子进程（测试执行 / 覆盖率采集 / 测试生成）
+///
+/// 策略：先发送 SIGTERM 优雅终止，2 秒后仍存活则 SIGKILL 强制终止。
+/// 被终止的进程由其所属命令的 wait() 感知到，随后照常发出对应的 *-finished 事件（success=false）。
+#[tauri::command]
+pub async fn cancel_run(state: tauri::State<'_, AppState>, run_id: String) -> Result<(), String> {
+    if let Ok(mut cancelled) = state.cancelled_runs.lock() {
+        cancelled.insert(run_id.clone(), true);
+    }
+
+    let pid = state
+        .processes
+        .lock()
+        .map_err(|e| format!("Failed to lock process state: {}", e))?
+        .get(&run_id)
+        .copied();
+
+    if let Some(pid) = pid {
+        if process_alive(pid) {
+            let _ = terminate_pid(pid, false);
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            if process_alive(pid) {
+                let _ = terminate_pid(pid, true);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn register_run(app: &AppHandle, run_id: &str, pid: u32) {
+    if let Ok(mut processes) = app.state::<AppState>().processes.lock() {
+        processes.insert(run_id.to_string(), pid);
+    }
+}
+
+fn unregister_run(app: &AppHandle, run_id: &str) {
+    if let Ok(mut processes) = app.state::<AppState>().processes.lock() {
+        processes.remove(run_id);
+    }
+    if let Ok(mut cancelled) = app.state::<AppState>().cancelled_runs.lock() {
+        cancelled.remove(run_id);
+    }
 }
 
 fn parse_junit_results(path: &Path) -> Result<Vec<TestResult>, String> {
@@ -1190,6 +1416,7 @@ fn scan_source_directory(
 // ============================================
 
 #[tauri::command]
+#[allow(unused_variables)]
 pub async fn generate_tests(
     app_handle: AppHandle,
     project_id: i64,
@@ -1240,6 +1467,25 @@ pub async fn generate_tests(
     let mut command_str = String::new();
 
     for (i, rel_path) in source_files.iter().enumerate() {
+        if app_handle
+            .state::<AppState>()
+            .cancelled_runs
+            .lock()
+            .map(|m| m.contains_key(&run_id))
+            .unwrap_or(false)
+        {
+            let _ = app_handle.emit(
+                "generation-output",
+                GenerationOutputEvent {
+                    run_id: run_id.clone(),
+                    stream: "stdout".to_string(),
+                    line: "\n[Stopped] Generation cancelled by user.".to_string(),
+                },
+            );
+            overall_success = false;
+            break;
+        }
+
         let file_path = project.join(rel_path);
 
         if !file_path.exists() {
@@ -1380,6 +1626,8 @@ pub async fn generate_tests(
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
+        register_run(&app_handle, &run_id, child.id().unwrap_or(0));
+
         let stdout_handle = app_handle.clone();
         let stdout_run_id = run_id.clone();
         let stdout_task = tokio::spawn(async move {
@@ -1496,6 +1744,8 @@ pub async fn generate_tests(
 
     let duration = start.elapsed().as_secs_f64();
 
+    unregister_run(&app_handle, &run_id);
+
     let _ = app_handle.emit(
         "generation-finished",
         GenerationFinishedEvent {
@@ -1525,6 +1775,61 @@ fn count_test_cases(path: &Path) -> usize {
             trimmed.starts_with("def test_") || trimmed.starts_with("async def test_")
         })
         .count()
+}
+
+// ============================================
+// Command: Clone Repository
+// ============================================
+
+/// 克隆 Git 仓库到指定目录（git clone），返回克隆出的项目目录绝对路径
+#[tauri::command]
+pub async fn clone_repository(
+    repo_url: String,
+    target_dir: String,
+) -> Result<String, String> {
+    let url = repo_url.trim();
+    if url.is_empty() {
+        return Err("Repository URL must not be empty.".to_string());
+    }
+    let is_supported = url.starts_with("http://")
+        || url.starts_with("https://")
+        || url.starts_with("ssh://")
+        || url.starts_with("git@");
+    if !is_supported {
+        return Err(
+            "Unsupported repository URL format. Use https://, http://, ssh:// or git@."
+                .to_string(),
+        );
+    }
+
+    let target = PathBuf::from(&target_dir);
+    if !target.is_dir() {
+        return Err(format!("Target directory does not exist: {}", target_dir));
+    }
+
+    let output = AsyncCommand::new("git")
+        .args(["clone", url])
+        .current_dir(&target)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run git clone (is git installed?): {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "git clone failed:\n{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    let trimmed = url.trim_end_matches('/');
+    let repo_name = trimmed
+        .rsplit('/')
+        .next()
+        .unwrap_or("repository")
+        .trim_end_matches(".git")
+        .to_string();
+
+    Ok(target.join(repo_name).to_string_lossy().to_string())
 }
 
 // ============================================
@@ -1858,6 +2163,8 @@ pub async fn run_coverage(
         .take()
         .ok_or_else(|| "Failed to capture coverage stderr".to_string())?;
 
+    register_run(&app, &run_id, child.id().unwrap_or(0));
+
     let stdout_handle = app.clone();
     let stdout_run_id = run_id.clone();
     let stdout_task = tokio::spawn(async move {
@@ -1892,10 +2199,14 @@ pub async fn run_coverage(
         }
     });
 
-    let status = child
-        .wait()
-        .await
-        .map_err(|e| format!("Failed waiting for coverage run: {}", e))?;
+    let status = match child.wait().await {
+        Ok(s) => s,
+        Err(e) => {
+            unregister_run(&app, &run_id);
+            return Err(format!("Failed waiting for coverage run: {}", e));
+        }
+    };
+    unregister_run(&app, &run_id);
     let _ = stdout_task.await;
     let _ = stderr_task.await;
 
@@ -2326,4 +2637,129 @@ fn csv_escape(field: &str) -> String {
     } else {
         field.to_string()
     }
+}
+
+// ============================================
+// Command: Typed Persistence Layer (NFR008)
+// ============================================
+
+/// 初始化数据库表结构（幂等，含旧 schema 迁移）
+#[tauri::command]
+pub async fn init_db(app: tauri::AppHandle) -> Result<(), String> {
+    crate::db::init(&app).await
+}
+
+/// 获取项目列表（附带执行历史 / 覆盖率聚合统计）
+#[tauri::command]
+pub async fn get_projects(
+    app: tauri::AppHandle,
+) -> Result<Vec<crate::db::ProjectRow>, String> {
+    crate::db::get_projects(&app).await
+}
+
+/// 新增项目（重复路径拦截），返回项目 id
+#[tauri::command]
+pub async fn add_project(
+    app: tauri::AppHandle,
+    name: String,
+    project_path: String,
+    interpreter_path: Option<String>,
+) -> Result<i64, String> {
+    crate::db::add_project(&app, &name, &project_path, interpreter_path).await
+}
+
+#[tauri::command]
+pub async fn update_last_opened(
+    app: tauri::AppHandle,
+    project_id: i64,
+) -> Result<(), String> {
+    crate::db::update_last_opened(&app, project_id).await
+}
+
+#[tauri::command]
+pub async fn update_project_name(
+    app: tauri::AppHandle,
+    project_id: i64,
+    new_name: String,
+) -> Result<(), String> {
+    crate::db::update_project_name(&app, project_id, &new_name).await
+}
+
+#[tauri::command]
+pub async fn delete_project(
+    app: tauri::AppHandle,
+    project_id: i64,
+) -> Result<(), String> {
+    crate::db::delete_project(&app, project_id).await
+}
+
+/// 写入测试执行历史（execution_type: MANUAL / REGRESSION），返回记录 id
+#[tauri::command]
+pub async fn save_execution_history(
+    app: tauri::AppHandle,
+    project_id: i64,
+    execution_type: String,
+    regression_suite_id: Option<i64>,
+    execution_status: String,
+    command: Option<String>,
+    total_tests: i64,
+    passed: i64,
+    failed: i64,
+    skipped: i64,
+    execution_time: f64,
+) -> Result<i64, String> {
+    crate::db::save_execution_history(
+        &app,
+        project_id,
+        &execution_type,
+        regression_suite_id,
+        &execution_status,
+        command,
+        total_tests,
+        passed,
+        failed,
+        skipped,
+        execution_time,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn save_coverage_result(
+    app: tauri::AppHandle,
+    project_id: i64,
+    execution_id: Option<i64>,
+    total_statement_coverage: f64,
+    total_branch_coverage: Option<f64>,
+    file_count: i64,
+    covered_file_count: i64,
+    detail_json_path: Option<String>,
+) -> Result<(), String> {
+    crate::db::save_coverage_result(
+        &app,
+        project_id,
+        execution_id,
+        total_statement_coverage,
+        total_branch_coverage,
+        file_count,
+        covered_file_count,
+        detail_json_path,
+    )
+    .await
+}
+
+/// 全局执行总次数
+#[tauri::command]
+pub async fn count_execution_history(
+    app: tauri::AppHandle,
+) -> Result<i64, String> {
+    crate::db::count_execution_history(&app).await
+}
+
+/// 全局统计：平均通过率 / 平均覆盖率
+#[tauri::command]
+pub async fn get_global_stats(
+    app: tauri::AppHandle,
+) -> Result<crate::db::GlobalStatsRow, String> {
+    crate::db::get_global_stats(&app).await
 }

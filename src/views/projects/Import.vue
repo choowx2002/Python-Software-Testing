@@ -4,13 +4,14 @@ import { useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
-import { getDatabase } from '../../utils/db'
+import { useI18n } from 'vue-i18n'
 import {
   FolderPlus, FolderOpen, Check, X, AlertCircle,
   ArrowLeft, Loader2, Sparkles, Terminal, Package
 } from '@lucide/vue'
 
 const router = useRouter()
+const { t } = useI18n()
 
 // ============================================
 // State
@@ -75,12 +76,12 @@ async function selectFolder() {
     const selected = await open({
       directory: true,
       multiple: false,
-      title: 'Select Python Project Directory',
+      title: t('import.selectStep.title'),
     })
     if (!selected) return
     projectPath.value = selected as string
     const parts = projectPath.value.replace(/[/\\]$/, '').split(/[/\\]/)
-    projectName.value = parts[parts.length - 1] || 'Untitled Project'
+    projectName.value = parts[parts.length - 1] || t('import.selectStep.untitled')
     await detectEnvironment()
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
@@ -144,7 +145,7 @@ async function installMissingDeps() {
       await detectEnvironment() // 刷新状态
     } else {
       // 如果有失败的，直接通过 error 提示，不再用大段 log
-      error.value = `Failed to install: ${result.failed.join(', ')}. Please check your network or try again.`
+      error.value = t('import.reviewStep.installFailed', { packages: result.failed.join(', ') })
     }
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
@@ -158,20 +159,12 @@ async function saveProject() {
   if (!isEnvReady.value || !envResult.value) return
   phase.value = 'saving'
   try {
-    const db = await getDatabase()
-    const existing = await db.select<{ id: number }[]>(
-      `SELECT id FROM projects WHERE project_path = ?`,
-      [projectPath.value]
-    )
-    if (existing.length > 0) {
-      error.value = 'This project has already been imported.'
-      phase.value = 'review'
-      return
-    }
-    await db.execute(
-      `INSERT INTO projects (name, project_path, interpreter_path, status) VALUES (?, ?, ?, ?)`,
-      [projectName.value, projectPath.value, envResult.value.python_path, 'active']
-    )
+    // NFR008：写入 projects 表走 Rust 类型化命令（含重复路径拦截）
+    await invoke("add_project", {
+      name: projectName.value,
+      projectPath: projectPath.value,
+      interpreterPath: envResult.value.python_path,
+    })
     phase.value = 'done'
     setTimeout(() => router.push("/"), 800)
   } catch (err) {
@@ -188,6 +181,12 @@ function reset() {
   error.value = null
   stepStatus.value = {}
 }
+
+// 模板内 phase 比较：vue-tsc 会基于外层 v-if 收窄联合类型，
+// 用函数比较可避免误报（phase 是响应式，运行时会变化）
+function isPhase(p: Phase): boolean {
+  return phase.value === p
+}
 </script>
 
 <template>
@@ -200,17 +199,17 @@ function reset() {
         </button>
         <div class="w-px h-5 bg-zinc-200/80"></div>
         <FolderPlus class="w-4 h-4 text-emerald-500" />
-        <h2 class="text-sm font-semibold text-slate-800">Import Project</h2>
+        <h2 class="text-sm font-semibold text-slate-800">{{ t('import.title') }}</h2>
       </div>
       <div class="flex items-center gap-2 text-[10px] font-mono text-slate-500">
-        <span :class="phase === 'select' ? 'text-emerald-600 font-semibold' : ''">1.SELECT</span>
+        <span :class="phase === 'select' ? 'text-emerald-600 font-semibold' : ''">{{ t('import.stepSelect') }}</span>
         <span class="text-slate-300">→</span>
-        <span :class="phase === 'detecting' ? 'text-emerald-600 font-semibold' : ''">2.DETECT</span>
+        <span :class="phase === 'detecting' ? 'text-emerald-600 font-semibold' : ''">{{ t('import.stepDetect') }}</span>
         <span class="text-slate-300">→</span>
         <span
-          :class="phase === 'review' || phase === 'installing' ? 'text-emerald-600 font-semibold' : ''">3.REVIEW</span>
+          :class="phase === 'review' || phase === 'installing' ? 'text-emerald-600 font-semibold' : ''">{{ t('import.stepReview') }}</span>
         <span class="text-slate-300">→</span>
-        <span :class="phase === 'saving' || phase === 'done' ? 'text-emerald-600 font-semibold' : ''">4.SAVE</span>
+        <span :class="phase === 'saving' || phase === 'done' ? 'text-emerald-600 font-semibold' : ''">{{ t('import.stepSave') }}</span>
       </div>
     </div>
 
@@ -224,29 +223,28 @@ function reset() {
             <div class="w-14 h-14 bg-emerald-50 rounded-md flex items-center justify-center mx-auto mb-4">
               <FolderOpen class="w-7 h-7 text-emerald-500" />
             </div>
-            <h3 class="text-lg font-semibold text-slate-800 mb-1">Select Python Project</h3>
-            <p class="text-xs text-slate-500">Choose a local directory containing your Python source code.</p>
+            <h3 class="text-lg font-semibold text-slate-800 mb-1">{{ t('import.selectStep.title') }}</h3>
+            <p class="text-xs text-slate-500">{{ t('import.selectStep.description') }}</p>
           </div>
           <button @click="selectFolder"
             class="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium rounded-md transition-colors active:scale-[0.99] flex items-center justify-center gap-2">
-            <FolderOpen class="w-4 h-4" /> Browse Directory...
+            <FolderOpen class="w-4 h-4" /> {{ t('import.selectStep.pickFolder') }}
           </button>
           <div v-if="error" class="mt-4 p-3 bg-rose-50 border border-rose-200 rounded-md flex items-start gap-2">
             <X class="w-4 h-4 text-rose-500 flex-shrink-0 mt-0.5" />
             <p class="text-xs text-rose-700">{{ error }}</p>
           </div>
           <div class="mt-6 p-3 bg-slate-50 rounded-md">
-            <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Requirements</p>
+            <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2">{{ t('import.selectStep.requirements') }}</p>
             <ul class="space-y-1 text-[11px] text-slate-600">
               <li class="flex items-center gap-2">
-                <Check class="w-3 h-3 text-emerald-500" /> Contains <code class="font-mono text-slate-800">.py</code> or
-                config files
+                <Check class="w-3 h-3 text-emerald-500" /> {{ t('import.selectStep.reqPyFiles') }}
               </li>
               <li class="flex items-center gap-2">
-                <Check class="w-3 h-3 text-emerald-500" /> Python 3.10+ installed globally
+                <Check class="w-3 h-3 text-emerald-500" /> {{ t('import.selectStep.reqPython310') }}
               </li>
               <li class="flex items-center gap-2">
-                <Sparkles class="w-3 h-3 text-emerald-500" /> Virtual environment will be created automatically
+                <Sparkles class="w-3 h-3 text-emerald-500" /> {{ t('import.selectStep.reqVenvAuto') }}
               </li>
             </ul>
           </div>
@@ -254,7 +252,7 @@ function reset() {
 
         <div v-else-if="phase === 'detecting'" class="bg-white border border-zinc-200/80 rounded-md p-8 text-center">
           <Loader2 class="w-10 h-10 text-emerald-500 animate-spin mx-auto mb-4" />
-          <h3 class="text-sm font-semibold text-slate-800 mb-1">Detecting Environment...</h3>
+          <h3 class="text-sm font-semibold text-slate-800 mb-1">{{ t('import.detectStep.title') }}</h3>
           <p class="text-xs text-slate-500 font-mono truncate">{{ projectPath }}</p>
         </div>
 
@@ -265,7 +263,7 @@ function reset() {
           <!-- Project Info -->
           <div class="p-5 border-b border-zinc-200/80">
             <div class="flex items-center justify-between mb-3">
-              <h3 class="text-sm font-semibold text-slate-800">Project Configuration</h3>
+              <h3 class="text-sm font-semibold text-slate-800">{{ t('import.reviewStep.projectConfig') }}</h3>
               <span :class="[
                 'inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded-full',
                 envStatus === 'Ready' ? 'bg-emerald-50 text-emerald-600' :
@@ -276,17 +274,17 @@ function reset() {
                   'w-1.5 h-1.5 rounded-full',
                   envStatus === 'Ready' ? 'bg-emerald-500' : envStatus === 'Warning' ? 'bg-amber-500' : envStatus === 'Action Required' ? 'bg-blue-500' : 'bg-rose-500'
                 ]"></span>
-                {{ envStatus === 'Action Required' ? 'Action Required' : envStatus }}
+                {{ envStatus === 'Action Required' ? t('import.reviewStep.actionRequired') : envStatus }}
               </span>
             </div>
             <div class="space-y-2">
               <div>
-                <label class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Project Name</label>
+                <label class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{{ t('import.reviewStep.projectName') }}</label>
                 <input v-model="projectName" type="text"
                   class="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-zinc-200/80 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/40" />
               </div>
               <div>
-                <label class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Project Path</label>
+                <label class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{{ t('import.reviewStep.projectPath') }}</label>
                 <p
                   class="mt-1 px-3 py-1.5 bg-slate-50 border border-zinc-200/80 rounded-md text-xs font-mono text-slate-600 truncate">
                   {{ projectPath }}</p>
@@ -296,23 +294,23 @@ function reset() {
 
           <!-- Environment Details -->
           <div class="p-5 border-b border-zinc-200/80">
-            <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-3">Environment Detection</p>
+            <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-3">{{ t('import.reviewStep.envTitle') }}</p>
             <div class="space-y-2">
               <!-- Python -->
               <div class="flex items-center justify-between px-3 py-2 bg-slate-50 rounded-md">
                 <div class="flex items-center gap-2">
                   <Terminal class="w-3.5 h-3.5 text-slate-500" />
-                  <span class="text-xs text-slate-700">Python Interpreter</span>
+                  <span class="text-xs text-slate-700">{{ t('import.reviewStep.pythonInterpreter') }}</span>
                 </div>
                 <div v-if="envResult?.python_path && envResult.python_version" class="flex items-center gap-2">
                   <span class="text-xs font-mono text-slate-600">
                     {{ envResult.python_version }}
-                    <span v-if="!envResult.venv_exists" class="text-[10px] text-slate-400 ml-1">(Global)</span>
+                    <span v-if="!envResult.venv_exists" class="text-[10px] text-slate-400 ml-1">{{ t('import.reviewStep.global') }}</span>
                   </span>
                   <Check class="w-3.5 h-3.5 text-emerald-500" />
                 </div>
                 <div v-else class="flex items-center gap-2">
-                  <span class="text-xs text-rose-600">Not found</span>
+                  <span class="text-xs text-rose-600">{{ t('import.reviewStep.notFound') }}</span>
                   <X class="w-3.5 h-3.5 text-rose-500" />
                 </div>
               </div>
@@ -321,22 +319,22 @@ function reset() {
               <div class="flex items-center justify-between px-3 py-2 bg-slate-50 rounded-md">
                 <div class="flex items-center gap-2">
                   <Package class="w-3.5 h-3.5 text-slate-500" />
-                  <span class="text-xs text-slate-700">Virtual Environment</span>
+                  <span class="text-xs text-slate-700">{{ t('import.reviewStep.virtualEnv') }}</span>
                 </div>
                 <div v-if="envResult?.venv_exists" class="flex items-center gap-2">
                   <span class="text-xs font-mono text-slate-600 truncate max-w-[220px]">{{ envResult.venv_path }}</span>
                   <Check class="w-3.5 h-3.5 text-emerald-500" />
                 </div>
                 <div v-else-if="envResult?.python_path" class="flex items-center gap-2">
-                  <span class="text-xs text-blue-600">Ready to create</span>
-                  <button @click="createVirtualEnv" :disabled="phase === 'detecting'"
+                  <span class="text-xs text-blue-600">{{ t('import.reviewStep.readyToCreate') }}</span>
+                  <button @click="createVirtualEnv" :disabled="isPhase('detecting')"
                     class="flex items-center gap-1 px-2 py-0.5 bg-blue-500 hover:bg-blue-600 text-white text-[10px] font-medium rounded transition-colors disabled:opacity-50">
-                    <Loader2 v-if="phase === 'detecting'" class="w-3 h-3 animate-spin" />
-                    <span v-else>Create .venv</span>
+                    <Loader2 v-if="isPhase('detecting')" class="w-3 h-3 animate-spin" />
+                    <span v-else>{{ t('import.reviewStep.createVenv') }}</span>
                   </button>
                 </div>
                 <div v-else class="flex items-center gap-2">
-                  <span class="text-xs text-rose-600">Python not installed</span>
+                  <span class="text-xs text-rose-600">{{ t('import.reviewStep.pythonNotInstalled') }}</span>
                   <AlertCircle class="w-3.5 h-3.5 text-rose-500" />
                 </div>
               </div>
@@ -352,7 +350,7 @@ function reset() {
 
                   <!-- 动态状态指示器 -->
                   <div v-if="stepStatus[dep.name] === 'starting'" class="flex items-center gap-2">
-                    <span class="text-xs font-medium text-blue-600">Installing...</span>
+                    <span class="text-xs font-medium text-blue-600">{{ t('import.reviewStep.installing') }}</span>
                     <Loader2 class="w-3.5 h-3.5 text-blue-500 animate-spin" />
                   </div>
                   <div v-else-if="stepStatus[dep.name] === 'success' || dep.installed" class="flex items-center gap-2">
@@ -361,7 +359,7 @@ function reset() {
                   </div>
                   <div v-else-if="stepStatus[dep.name] === 'failed' || !dep.installed" class="flex items-center gap-2">
                     <span class="text-xs text-rose-600">
-                      {{ stepStatus[dep.name] === 'failed' ? 'Failed' : 'Missing' }}
+                      {{ stepStatus[dep.name] === 'failed' ? t('import.reviewStep.failed') : t('import.reviewStep.missing') }}
                     </span>
                     <X class="w-3.5 h-3.5 text-rose-500" />
                   </div>
@@ -371,7 +369,7 @@ function reset() {
               <div v-else-if="envResult?.python_path" class="px-3 py-3 bg-blue-50 rounded-md border border-blue-100">
                 <p class="text-xs text-blue-700 flex items-start gap-2">
                   <AlertCircle class="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-                  A virtual environment is required. Click "Create .venv" above to proceed.
+                  {{ t('import.reviewStep.venvRequired') }}
                 </p>
               </div>
             </div>
@@ -381,7 +379,7 @@ function reset() {
             <div class="p-2 bg-blue-50 border border-blue-200 rounded-md flex items-center gap-2">
               <Loader2 class="w-3.5 h-3.5 text-blue-500 animate-spin shrink-0" />
               <p class="text-xs text-blue-700">
-                Installing dependencies. Please do not close this window to avoid corrupting the virtual environment.
+                {{ t('import.reviewStep.installingWarning') }}
               </p>
             </div>
           </div>
@@ -390,21 +388,21 @@ function reset() {
           <div class="p-5 flex items-center justify-between gap-3">
             <button @click="reset"
               class="px-4 py-2 bg-white border border-zinc-200/80 text-xs font-medium text-slate-600 rounded-md hover:bg-slate-50 transition-colors active:scale-[0.98]">
-              Cancel
+              {{ t('common.cancel') }}
             </button>
 
             <div class="flex items-center gap-2">
               <button v-if="missingDeps.length > 0 && phase === 'review'" @click="installMissingDeps"
                 class="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-medium rounded-md transition-colors active:scale-[0.98] flex items-center gap-1.5">
                 <Sparkles class="w-3.5 h-3.5" />
-                Install Missing ({{ missingDeps.length }})
+                {{ t('import.reviewStep.installMissing', { count: missingDeps.length }) }}
               </button>
 
-              <button @click="saveProject" :disabled="!isEnvReady || phase === 'installing' || phase === 'saving'"
+              <button @click="saveProject" :disabled="!isEnvReady || isPhase('installing') || isPhase('saving')"
                 class="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-xs font-medium rounded-md transition-colors active:scale-[0.98] flex items-center gap-1.5">
-                <Loader2 v-if="phase === 'saving'" class="w-3.5 h-3.5 animate-spin" />
+                <Loader2 v-if="isPhase('saving')" class="w-3.5 h-3.5 animate-spin" />
                 <Check v-else class="w-3.5 h-3.5" />
-                {{ phase === 'saving' ? 'Saving...' : 'Import Project' }}
+                {{ isPhase('saving') ? t('common.saving') : t('import.reviewStep.importProject') }}
               </button>
             </div>
           </div>
@@ -423,8 +421,8 @@ function reset() {
           <div class="w-14 h-14 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-4">
             <Check class="w-7 h-7 text-emerald-500" />
           </div>
-          <h3 class="text-lg font-semibold text-slate-800 mb-1">Project Imported Successfully!</h3>
-          <p class="text-xs text-slate-500 mb-4">Redirecting to Dashboard...</p>
+          <h3 class="text-lg font-semibold text-slate-800 mb-1">{{ t('import.doneStep.title') }}</h3>
+          <p class="text-xs text-slate-500 mb-4">{{ t('import.doneStep.goToDashboard') }}</p>
           <p class="text-[11px] font-mono text-slate-600 truncate">{{ projectName }}</p>
         </div>
 

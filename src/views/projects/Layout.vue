@@ -18,12 +18,14 @@ import {
 } from '@lucide/vue'
 import { useProjectStore, type Project } from '../../stores/projectStore'
 import { invoke } from '@tauri-apps/api/core'
+import { useI18n } from 'vue-i18n'
 
 type ProjectRouteName = 'ProjectExecute' | 'ProjectGenerate' | 'ProjectCoverage'
 
 const route = useRoute()
 const router = useRouter()
 const projectStore = useProjectStore()
+const { t } = useI18n()
 
 const isRefreshing = ref(false)
 const localError = ref<string | null>(null)
@@ -38,20 +40,20 @@ const currentProject = computed<Project | undefined>(() => {
 const navItems = computed(() => [
   {
     name: 'ProjectExecute' as const,
-    label: '执行',
-    desc: '运行测试、查看结果',
+    label: t('layout.tabs.execute'),
+    desc: t('layout.tabs.execute'),
     icon: Play,
   },
   {
     name: 'ProjectGenerate' as const,
-    label: '生成',
-    desc: '生成测试用例 / 回归测试',
+    label: t('layout.tabs.generate'),
+    desc: t('layout.tabs.generate'),
     icon: WandSparkles,
   },
   {
     name: 'ProjectCoverage' as const,
-    label: '覆盖率',
-    desc: '查看覆盖率统计',
+    label: t('layout.tabs.coverage'),
+    desc: t('layout.tabs.coverage'),
     icon: Gauge,
   },
 ])
@@ -66,25 +68,25 @@ const statusMeta = computed(() => {
   switch (status) {
     case 'Ready':
       return {
-        text: 'Ready',
+        text: t('layout.statusReady'),
         color: 'bg-emerald-50 text-emerald-700 border-emerald-200',
         icon: CheckCircle2,
       }
     case 'Warning':
       return {
-        text: 'Warning',
+        text: t('layout.statusWarning'),
         color: 'bg-amber-50 text-amber-700 border-amber-200',
         icon: AlertCircle,
       }
     case 'Failed':
       return {
-        text: 'Failed',
+        text: t('layout.statusFailed'),
         color: 'bg-rose-50 text-rose-700 border-rose-200',
         icon: XCircle,
       }
     case 'active':
       return {
-        text: 'Active',
+        text: t('layout.statusActive'),
         color: 'bg-sky-50 text-sky-700 border-sky-200',
         icon: Clock3,
       }
@@ -128,7 +130,7 @@ async function openProjectFolder() {
 
 async function refreshProject() {
   if (Number.isNaN(projectId.value)) {
-    localError.value = '项目 ID 无效'
+    localError.value = t('layout.invalidId')
     return
   }
 
@@ -140,7 +142,7 @@ async function refreshProject() {
     await projectStore.updateLastOpened(projectId.value)
   } catch (error) {
     console.error('[ProjectLayout] refreshProject failed:', error)
-    localError.value = '刷新项目数据失败'
+    localError.value = t('layout.refreshFailed')
   } finally {
     isRefreshing.value = false
   }
@@ -148,7 +150,7 @@ async function refreshProject() {
 
 async function ensureProjectLoaded() {
   if (Number.isNaN(projectId.value)) {
-    localError.value = '项目 ID 无效'
+    localError.value = t('layout.invalidId')
     return
   }
 
@@ -161,14 +163,14 @@ async function ensureProjectLoaded() {
 
     const found = projectStore.projects.find((p) => p.id === projectId.value)
     if (!found) {
-      localError.value = `找不到项目：${projectId.value}`
+      localError.value = t('layout.projectNotFound', { id: projectId.value })
       return
     }
 
     await projectStore.updateLastOpened(projectId.value)
   } catch (error) {
     console.error('[ProjectLayout] ensureProjectLoaded failed:', error)
-    localError.value = '加载项目失败'
+    localError.value = t('layout.loadFailed')
   }
 }
 
@@ -195,22 +197,22 @@ onMounted(() => {
             <Settings2 class="h-5 w-5" />
           </div>
           <div>
-            <div class="text-sm font-semibold text-slate-900">Project Context</div>
-            <div class="text-xs text-slate-500">执行 / 生成 / 覆盖率</div>
+            <div class="text-sm font-semibold text-slate-900">{{ t('layout.context') }}</div>
+            <div class="text-xs text-slate-500">{{ t('layout.contextDesc') }}</div>
           </div>
         </div>
 
         <div class="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
           <div class="text-[11px] font-medium uppercase tracking-wider text-slate-500">
-            当前项目
+            {{ t('layout.currentProject') }}
           </div>
 
           <div class="mt-2 text-base font-semibold text-slate-900">
-            {{ currentProject?.name ?? '未加载' }}
+            {{ currentProject?.name ?? t('layout.notLoaded') }}
           </div>
 
           <div class="mt-1 break-all text-xs leading-5 text-slate-500">
-            {{ currentProject?.path ?? '正在读取项目路径...' }}
+            {{ currentProject?.path ?? t('layout.loadingPath') }}
           </div>
 
           <div class="mt-3 flex items-center gap-2">
@@ -231,7 +233,7 @@ onMounted(() => {
 
       <div class="flex-1 overflow-auto px-3 py-4">
         <div class="px-2 pb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-          页面导航
+          {{ t('layout.pageNav') }}
         </div>
 
         <div class="space-y-1">
@@ -279,7 +281,7 @@ onMounted(() => {
           class="flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
         >
           <ArrowLeft class="h-4 w-4" />
-          返回 Dashboard
+          {{ t('layout.backToDashboard') }}
         </button>
       </div>
     </aside>
@@ -296,11 +298,11 @@ onMounted(() => {
                 @click="goBack"
               >
                 <ArrowLeft class="h-4 w-4" />
-                Projects
+                {{ t('layout.breadcrumbProjects') }}
               </button>
               <span>/</span>
               <span class="font-medium text-slate-700">
-                Project {{ projectId }}
+                {{ t('layout.projectLabel', { id: projectId }) }}
               </span>
               <span>/</span>
               <span class="font-medium text-slate-900">
@@ -310,19 +312,19 @@ onMounted(() => {
 
             <div class="mt-2 flex items-center gap-3">
               <h1 class="truncate text-xl font-semibold text-slate-900">
-                {{ currentProject?.name ?? 'Project Context' }}
+                {{ currentProject?.name ?? t('layout.context') }}
               </h1>
 
               <span
                 class="inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium text-slate-500"
               >
                 <FileText class="mr-1.5 h-3.5 w-3.5" />
-                {{ currentProject?.interpreter_path ?? 'No interpreter' }}
+                {{ currentProject?.interpreter_path ?? t('layout.noInterpreter') }}
               </span>
             </div>
 
             <p class="mt-1 truncate text-sm text-slate-500">
-              {{ currentProject?.path ?? '等待项目数据加载...' }}
+              {{ currentProject?.path ?? t('layout.waitingData') }}
             </p>
           </div>
 
@@ -333,7 +335,7 @@ onMounted(() => {
               class="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
             >
               <FolderOpen class="h-4 w-4" />
-              打开目录
+              {{ t('layout.openFolder') }}
             </button>
 
             <button
@@ -343,7 +345,7 @@ onMounted(() => {
               class="inline-flex items-center gap-2 rounded-2xl bg-emerald-500 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <RefreshCw :class="['h-4 w-4', isRefreshing ? 'animate-spin' : '']" />
-              刷新
+              {{ t('common.refresh') }}
             </button>
           </div>
         </div>
@@ -384,13 +386,13 @@ onMounted(() => {
         <aside class="min-h-0 overflow-auto rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <div class="flex items-center gap-2 text-sm font-semibold text-slate-900">
             <ExternalLink class="h-4 w-4 text-slate-500" />
-            项目概览
+            {{ t('layout.overview') }}
           </div>
 
           <div class="mt-4 space-y-3">
             <div class="rounded-2xl bg-slate-50 p-4">
               <div class="text-[11px] font-medium uppercase tracking-wider text-slate-500">
-                Coverage
+                {{ t('layout.overviewItems.coverage') }}
               </div>
               <div class="mt-2 text-3xl font-semibold text-slate-900">
                 {{ safeCoverage.toFixed(1) }}%
@@ -405,14 +407,14 @@ onMounted(() => {
 
             <div class="grid grid-cols-2 gap-3">
               <div class="rounded-2xl border border-slate-200 p-4">
-                <div class="text-[11px] text-slate-500">Pass</div>
+                <div class="text-[11px] text-slate-500">{{ t('layout.pass') }}</div>
                 <div class="mt-1 text-xl font-semibold text-slate-900">
                   {{ currentProject?.tests_passed ?? 0 }}
                 </div>
               </div>
 
               <div class="rounded-2xl border border-slate-200 p-4">
-                <div class="text-[11px] text-slate-500">Fail</div>
+                <div class="text-[11px] text-slate-500">{{ t('layout.fail') }}</div>
                 <div class="mt-1 text-xl font-semibold text-slate-900">
                   {{ currentProject?.tests_failed ?? 0 }}
                 </div>
@@ -421,21 +423,21 @@ onMounted(() => {
 
             <div class="rounded-2xl border border-slate-200 p-4">
               <div class="text-[11px] font-medium uppercase tracking-wider text-slate-500">
-                Last Run
+                {{ t('layout.lastRun') }}
               </div>
               <div class="mt-2 text-sm font-medium text-slate-900">
-                {{ currentProject?.last_run ?? 'Never' }}
+                {{ currentProject?.last_run ?? t('layout.overviewItems.never') }}
               </div>
             </div>
 
             <div class="rounded-2xl border border-slate-200 p-4">
               <div class="text-[11px] font-medium uppercase tracking-wider text-slate-500">
-                快速提示
+                {{ t('layout.tipTitle') }}
               </div>
               <ul class="mt-2 space-y-2 text-sm leading-6 text-slate-600">
-                <li>• 执行页负责跑测试</li>
-                <li>• 生成页负责生成用例</li>
-                <li>• 覆盖率页负责展示统计</li>
+                <li>• {{ t('layout.tipExecute') }}</li>
+                <li>• {{ t('layout.tipGenerate') }}</li>
+                <li>• {{ t('layout.tipCoverage') }}</li>
               </ul>
             </div>
           </div>

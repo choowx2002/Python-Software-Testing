@@ -19,8 +19,6 @@ import {
   FileCode2,
   Folder,
   FolderOpen,
-  Layers,
-  Play,
   RefreshCw,
   Search,
   Settings2,
@@ -30,11 +28,12 @@ import {
   XCircle,
 } from "@lucide/vue";
 import { useProjectStore } from "../../../stores/projectStore";
-import { getDatabase } from "../../../utils/db";
 import TreeItem from "../../../components/TreeItem.vue";
+import { useI18n } from "vue-i18n";
 
 const route = useRoute();
 const projectStore = useProjectStore();
+const { t } = useI18n();
 
 const projectId = computed(() => Number(route.params.id));
 
@@ -216,10 +215,6 @@ function buildSourceTree(files: SourceFile[]): TreeNode[] {
   return root;
 }
 
-function isFileSelected(path: string): boolean {
-  return selectedSourceFiles.value.includes(path);
-}
-
 function toggleFile(path: string) {
   if (isGenerating.value) return;
 
@@ -238,10 +233,6 @@ function toggleDir(path: string) {
   } else {
     expandedDirs.value.add(path);
   }
-}
-
-function isDirExpanded(path: string): boolean {
-  return expandedDirs.value.has(path);
 }
 
 const selectedCount = computed(() => selectedSourceFiles.value.length);
@@ -302,13 +293,13 @@ const canGenerate = computed(() => {
 const statusText = computed(() => {
   switch (generationStatus.value) {
     case "running":
-      return "Generating";
+      return t("generate.status.generating");
     case "completed":
-      return "Completed";
+      return t("generate.status.completed");
     case "failed":
-      return "Failed";
+      return t("generate.status.failed");
     default:
-      return "Ready";
+      return t("generate.status.ready");
   }
 });
 
@@ -354,7 +345,7 @@ const hasResult = computed(() => {
 });
 
 const lastRunSummary = computed(() => {
-  if (!hasResult.value) return "No generation completed yet";
+  if (!hasResult.value) return t("generate.noRunYet");
   return `${generatedFiles.value.length} files · ${elapsedTime.value.toFixed(2)}s`;
 });
 
@@ -369,31 +360,33 @@ const resultConclusion = computed(() => {
 
     if (successCount > 0 && emptyCount === 0) {
       return {
-        title: "Generation Successful",
-        description: `All ${successCount} test files were generated successfully.`,
+        title: t("generate.conclusion.successTitle"),
+        description: t("generate.conclusion.successDesc", { count: successCount }),
         type: "success" as const,
       };
     }
 
     if (successCount > 0) {
       return {
-        title: "Generation Partially Successful",
-        description: `${successCount} files generated, ${emptyCount} files had no testable code.`,
+        title: t("generate.conclusion.partialTitle"),
+        description: t("generate.conclusion.partialDesc", {
+          success: successCount,
+          empty: emptyCount,
+        }),
         type: "warning" as const,
       };
     }
 
     return {
-      title: "No Tests Generated",
-      description:
-        "Pynguin could not generate any tests for the selected files.",
+      title: t("generate.noTestsGeneratedTitle"),
+      description: t("generate.noTestsGeneratedDesc"),
       type: "warning" as const,
     };
   }
 
   return {
-    title: "Generation Failed",
-    description: "The generation process did not complete successfully.",
+    title: t("generate.conclusion.failedTitle"),
+    description: t("generate.conclusion.failedDesc"),
     type: "error" as const,
   };
 });
@@ -458,14 +451,11 @@ async function setupGenerationListeners() {
       generatedFiles.value = event.payload.generatedFiles;
       currentFile.value = null;
 
-      await saveGenerationToDb(event.payload);
-
       if (!event.payload.success && event.payload.generatedFiles.length === 0) {
         generationOutput.value.push({
           runId: event.payload.runId,
           stream: "stderr",
-          line:
-            "\n[系统警告] 生成进程异常退出，未生成任何测试文件。请检查上方的日志。",
+          line: t("generate.logs.systemWarning"),
           logId: logCounter++,
         });
         showGenerationLog.value = true;
@@ -482,7 +472,7 @@ async function scanSourceFiles() {
   const projectPath = currentProject.value?.path;
 
   if (!projectPath) {
-    sourceScanError.value = "Project path is not available";
+    sourceScanError.value = t("execute.projectPathUnavailable");
     return;
   }
 
@@ -546,10 +536,27 @@ async function generateTests() {
     generationOutput.value.push({
       runId: currentRunId.value ?? "local",
       stream: "stderr",
-      line: `\n[Fatal Error] 生成环境启动失败: ${errorMsg}`,
+      line: t("generate.logs.fatalStart", { msg: errorMsg }),
       logId: logCounter++,
     });
     showGenerationLog.value = true;
+  }
+}
+
+/**
+ * 取消当前生成任务：调用 Rust cancel_run（SIGTERM → SIGKILL）。
+ * 进程被终止后，generate_tests 会在下一轮循环检测到取消标记，
+ * 发出 generation-finished（success=false），由 listener 复位 UI 状态。
+ */
+async function stopGeneration() {
+  if (!isGenerating.value || !currentRunId.value) {
+    return;
+  }
+
+  try {
+    await invoke("cancel_run", { runId: currentRunId.value });
+  } catch (error) {
+    console.error("[Generate] Failed to cancel generation:", error);
   }
 }
 
@@ -563,35 +570,6 @@ function resetGenerationState() {
   generationOutput.value = [];
   generationStatus.value = "idle";
   showGenerationLog.value = false;
-}
-
-async function saveGenerationToDb(payload: GenerationFinishedEvent) {
-  if (!currentProject.value?.id) return;
-
-  try {
-    const db = await getDatabase();
-    const executionStatus = payload.success ? "success" : "failed";
-    const filesCount = payload.generatedFiles.length;
-
-    // await db.execute(
-    //   `INSERT INTO generation_history
-    //    (project_id, generation_type, status, command, files_generated, execution_time, algorithm, max_search_time)
-    //    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    //   [
-    //     currentProject.value.id,
-    //     "pynguin",
-    //     executionStatus,
-    //     payload.command,
-    //     filesCount,
-    //     payload.duration,
-    //     algorithm.value,
-    //     maxSearchTime.value,
-    //   ],
-    // );
-    console.log("[DB] ✅ Generation history saved successfully");
-  } catch (error) {
-    console.error("[DB] ❌ Failed to save generation history:", error);
-  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -714,14 +692,14 @@ onUnmounted(() => {
 
           <div class="min-w-0">
             <h1 class="text-lg font-semibold text-slate-900">
-              Generate Tests
+              {{ t("generate.title") }}
             </h1>
 
             <p class="mt-0.5 truncate text-xs text-slate-500">
               {{
                 currentProject?.name
-                  ? `Generate pytest tests for ${currentProject.name} using Pynguin`
-                  : "Generate pytest tests using Pynguin"
+                  ? t("generate.subtitle", { name: currentProject.name })
+                  : t("generate.subtitle", { name: t("layout.notLoaded") })
               }}
             </p>
           </div>
@@ -754,12 +732,12 @@ onUnmounted(() => {
               <FolderOpen class="h-4 w-4 text-slate-500" />
 
               <h2 class="text-sm font-semibold text-slate-900">
-                Source Selection
+                {{ t("generate.selectSource") }}
               </h2>
             </div>
 
             <p class="mt-1 text-xs text-slate-500">
-              Choose which modules to generate tests for.
+              {{ t("generate.selectSourceDesc") }}
             </p>
           </div>
 
@@ -774,7 +752,7 @@ onUnmounted(() => {
               :class="{ 'animate-spin': isLoadingSources }"
             />
 
-            {{ isLoadingSources ? "Scanning..." : "Refresh" }}
+            {{ isLoadingSources ? t("generate.scanning") : t("common.refresh") }}
           </button>
         </div>
 
@@ -788,7 +766,7 @@ onUnmounted(() => {
             <input
               v-model="sourceSearch"
               type="text"
-              placeholder="Search source files..."
+              :placeholder="t('generate.searchPlaceholder')"
               :disabled="isGenerating"
               class="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-xs text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-violet-400 focus:ring-2 focus:ring-violet-100 disabled:bg-slate-50"
             />
@@ -814,7 +792,7 @@ onUnmounted(() => {
               </button>
 
               <span class="text-xs font-medium text-slate-600">
-                {{ selectedCount }} selected
+                {{ t("generate.selectedCount", { count: selectedCount }) }}
               </span>
             </div>
 
@@ -829,7 +807,7 @@ onUnmounted(() => {
                 class="rounded-lg px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
                 @click="selectAllVisible"
               >
-                Select All
+                {{ t("generate.selectAll") }}
               </button>
 
               <button
@@ -838,7 +816,7 @@ onUnmounted(() => {
                 class="rounded-lg px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
                 @click="clearSelection"
               >
-                Clear
+                {{ t("generate.clear") }}
               </button>
             </div>
           </div>
@@ -848,7 +826,7 @@ onUnmounted(() => {
             v-if="isLoadingSources"
             class="px-5 py-10 text-center text-sm text-slate-500"
           >
-            Scanning source files...
+            {{ t("generate.scanningSources") }}
           </div>
 
           <div
@@ -860,11 +838,11 @@ onUnmounted(() => {
 
           <div v-else-if="sourceFiles.length === 0" class="px-5 py-10 text-center">
             <div class="text-sm font-medium text-slate-700">
-              No Python files found
+              {{ t("generate.noSources") }}
             </div>
 
             <div class="mt-1 text-xs text-slate-500">
-              Make sure the project contains Python source files.
+              {{ t("generate.noSourcesDesc") }}
             </div>
           </div>
 
@@ -872,7 +850,7 @@ onUnmounted(() => {
             v-else-if="filteredSourceFiles.length === 0"
             class="px-5 py-10 text-center text-sm text-slate-500"
           >
-            No files match your search.
+            {{ t("generate.noSearchResults") }}
           </div>
 
           <div v-else class="max-h-96 overflow-auto rounded-xl border border-slate-200">
@@ -897,7 +875,7 @@ onUnmounted(() => {
             <Settings2 class="h-4 w-4 text-slate-500" />
 
             <h2 class="text-sm font-semibold text-slate-900">
-              Generation Configuration
+              {{ t("generate.configTitle") }}
             </h2>
           </div>
 
@@ -912,12 +890,12 @@ onUnmounted(() => {
             <div>
               <div class="mb-2 flex items-center justify-between">
                 <label class="text-xs font-medium text-slate-700">
-                  Maximum Search Time
+                  {{ t("generate.timeLimit") }}
                 </label>
 
                 <div class="flex items-center gap-1 text-xs text-slate-500">
                   <Timer class="h-3 w-3" />
-                  <span>per file</span>
+                  <span>{{ t("generate.perFile") }}</span>
                 </div>
               </div>
 
@@ -931,18 +909,18 @@ onUnmounted(() => {
                   class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100 disabled:bg-slate-50"
                 />
 
-                <span class="shrink-0 text-xs text-slate-500">seconds</span>
+                <span class="shrink-0 text-xs text-slate-500">{{ t("generate.timeLimitUnit") }}</span>
               </div>
 
               <p class="mt-1.5 text-[11px] text-slate-400">
-                Estimated total: {{ estimatedTimeout }}s
+                {{ t("generate.estimatedTotal", { seconds: estimatedTimeout }) }}
               </p>
             </div>
 
             <!-- Algorithm -->
             <div>
               <label class="mb-2 block text-xs font-medium text-slate-700">
-                Algorithm
+                {{ t("generate.algorithm") }}
               </label>
 
               <div class="grid grid-cols-2 gap-2">
@@ -975,11 +953,11 @@ onUnmounted(() => {
             >
               <div>
                 <div class="text-sm font-medium text-slate-900">
-                  Assertion Generation
+                  {{ t("generate.assertGen") }}
                 </div>
 
                 <div class="mt-0.5 text-xs text-slate-500">
-                  Automatically generate test assertions
+                  {{ t("generate.assertGenDesc") }}
                 </div>
               </div>
 
@@ -1000,7 +978,7 @@ onUnmounted(() => {
             <!-- Max Test Cases -->
             <div>
               <label class="mb-2 block text-xs font-medium text-slate-700">
-                Maximum Test Cases
+                {{ t("generate.maxTestCases") }}
               </label>
 
               <input
@@ -1013,14 +991,14 @@ onUnmounted(() => {
               />
 
               <p class="mt-1.5 text-[11px] text-slate-400">
-                Maximum number of test cases per file
+                {{ t("generate.maxTestCasesDesc") }}
               </p>
             </div>
 
             <!-- Output Folder -->
             <div>
               <label class="mb-2 block text-xs font-medium text-slate-700">
-                Output Folder
+                {{ t("generate.outputFolder") }}
               </label>
 
               <input
@@ -1032,7 +1010,7 @@ onUnmounted(() => {
               />
 
               <p class="mt-1.5 text-[11px] text-slate-400">
-                Relative to the project root
+                {{ t("generate.outputFolderDesc") }}
               </p>
             </div>
 
@@ -1046,14 +1024,14 @@ onUnmounted(() => {
                 <ChevronDown v-if="showAdvanced" class="h-4 w-4" />
                 <ChevronRight v-else class="h-4 w-4" />
 
-                Advanced Options
+                {{ t("execute.advancedOptions") }}
               </button>
 
               <div v-if="showAdvanced" class="mt-4 space-y-4">
                 <div>
                   <label class="mb-2 block text-xs font-medium text-slate-700">
-                    Random Seed
-                    <span class="text-slate-400">(optional)</span>
+                    {{ t("generate.seed") }}
+                    <span class="text-slate-400">({{ t("common.optional") }})</span>
                   </label>
 
                   <input
@@ -1067,7 +1045,7 @@ onUnmounted(() => {
 
                 <div>
                   <label class="mb-2 block text-xs font-medium text-slate-700">
-                    Chromosome Length
+                    {{ t("generate.chromosomeLength") }}
                   </label>
 
                   <input
@@ -1081,7 +1059,7 @@ onUnmounted(() => {
 
                 <div>
                   <label class="mb-2 block text-xs font-medium text-slate-700">
-                    Population Size
+                    {{ t("generate.populationSize") }}
                   </label>
 
                   <input
@@ -1104,14 +1082,14 @@ onUnmounted(() => {
       <div class="flex items-center justify-between gap-4">
         <div>
           <div class="text-sm font-semibold text-slate-900">
-            Generate Tests
+            {{ t("generate.generateTests") }}
           </div>
 
           <div class="mt-1 text-xs text-slate-500">
             {{
               selectedCount > 0
-                ? `${selectedCount} file${selectedCount === 1 ? "" : "s"} selected · Estimated ${estimatedTimeout}s`
-                : "Select at least one source file to continue"
+                ? t("generate.generateSelectedDesc", { count: selectedCount, seconds: estimatedTimeout })
+                : t("generate.generateDesc")
             }}
           </div>
         </div>
@@ -1119,12 +1097,11 @@ onUnmounted(() => {
         <button
           v-if="isGenerating"
           type="button"
-          disabled
-          class="inline-flex cursor-not-allowed items-center gap-2 rounded-xl bg-violet-200 px-6 py-3 text-sm font-medium text-violet-500"
-          title="Process cancellation is not implemented yet"
+          class="inline-flex items-center gap-2 rounded-xl bg-rose-500 px-6 py-3 text-sm font-medium text-white transition hover:bg-rose-600"
+          @click="stopGeneration"
         >
           <Square class="h-4 w-4" />
-          Generating...
+          {{ t("generate.stop") }}
         </button>
 
         <button
@@ -1135,7 +1112,7 @@ onUnmounted(() => {
           @click="generateTests"
         >
           <Sparkles class="h-4 w-4" />
-          Generate Tests
+          {{ t("generate.generateTests") }}
         </button>
       </div>
     </section>
@@ -1147,16 +1124,16 @@ onUnmounted(() => {
       >
         <div>
           <div class="text-sm font-semibold text-slate-900">
-            Generation Progress
+            {{ t("generate.progress.title") }}
           </div>
 
           <div class="mt-1 text-xs text-slate-500">
-            Monitor the current generation run.
+            {{ t("generate.progress.desc") }}
           </div>
         </div>
 
         <div class="text-xs font-medium text-violet-600">
-          {{ completedFiles }} / {{ totalFiles }}
+          {{ t("generate.progress.filesDone", { completed: completedFiles, total: totalFiles }) }}
         </div>
       </div>
 
@@ -1164,11 +1141,11 @@ onUnmounted(() => {
         <div class="flex items-end justify-between gap-4">
           <div>
             <div class="text-sm font-semibold text-slate-900">
-              Generating tests...
+              {{ t("generate.progress.generating") }}
             </div>
 
             <div class="mt-1 text-xs text-slate-500">
-              {{ completedFiles }} of {{ totalFiles }} files processed
+              {{ t("generate.progress.filesProcessed", { completed: completedFiles, total: totalFiles }) }}
             </div>
           </div>
 
@@ -1184,15 +1161,15 @@ onUnmounted(() => {
 
         <div class="mt-5 grid grid-cols-2 gap-3">
           <div class="rounded-xl border border-violet-100 bg-violet-50 p-4">
-            <div class="text-xs text-violet-700">Current File</div>
+            <div class="text-xs text-violet-700">{{ t("generate.progress.currentFile") }}</div>
 
             <div class="mt-1 truncate font-mono text-xs font-medium text-violet-800">
-              {{ currentFile ?? "Preparing..." }}
+              {{ currentFile ?? t("generate.progress.preparing") }}
             </div>
           </div>
 
           <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
-            <div class="text-xs text-slate-600">Elapsed Time</div>
+            <div class="text-xs text-slate-600">{{ t("generate.progress.elapsedTime") }}</div>
 
             <div class="mt-1 flex items-center gap-1.5 text-xl font-semibold text-slate-700">
               <Clock3 class="h-4 w-4" />
@@ -1209,11 +1186,11 @@ onUnmounted(() => {
         <div class="flex items-center justify-between gap-4">
           <div>
             <div class="text-sm font-semibold text-slate-900">
-              Generated Tests
+              {{ t("generate.results.title") }}
             </div>
 
             <div class="mt-1 text-xs text-slate-500">
-              Review the generated test files.
+              {{ t("generate.results.desc") }}
             </div>
           </div>
 
@@ -1304,7 +1281,7 @@ onUnmounted(() => {
               <div class="mt-0.5 truncate font-mono text-[11px] text-slate-500">
                 {{ file.relativePath }}
                 <template v-if="file.testCaseCount > 0">
-                  · {{ file.testCaseCount }} test cases
+                  · {{ t("generate.results.testCases", { count: file.testCaseCount }) }}
                 </template>
               </div>
             </div>
@@ -1313,7 +1290,7 @@ onUnmounted(() => {
               <button
                 type="button"
                 class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-                title="Open file"
+                :title="t('generate.actions.openFile')"
                 @click="openFile(file.path)"
               >
                 <ExternalLink class="h-3.5 w-3.5" />
@@ -1322,7 +1299,7 @@ onUnmounted(() => {
               <button
                 type="button"
                 class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-                title="Reveal in folder"
+                :title="t('generate.actions.revealInFolder')"
                 @click="revealFile(file.path)"
               >
                 <Folder class="h-3.5 w-3.5" />
@@ -1331,7 +1308,7 @@ onUnmounted(() => {
               <button
                 type="button"
                 class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-                title="Copy path"
+                :title="t('generate.actions.copyPath')"
                 @click="copyPath(file.path)"
               >
                 <ClipboardCopy class="h-3.5 w-3.5" />
@@ -1341,7 +1318,7 @@ onUnmounted(() => {
         </div>
 
         <div v-else class="py-8 text-center text-xs text-slate-500">
-          No test files were generated.
+          {{ t("generate.results.empty") }}
         </div>
       </div>
     </section>
@@ -1365,11 +1342,11 @@ onUnmounted(() => {
 
           <div class="min-w-0">
             <div class="text-sm font-medium text-slate-800">
-              Generation Log
+              {{ t("generate.progress.logTitle") }}
             </div>
 
             <div class="mt-1 text-xs text-slate-500">
-              {{ generationOutput.length }} log lines
+              {{ t("generate.logLines", { count: generationOutput.length }) }}
             </div>
           </div>
         </div>
@@ -1390,7 +1367,7 @@ onUnmounted(() => {
             @click="copyLogs"
           >
             <Copy class="h-3 w-3" />
-            Copy
+            {{ t("common.copy") }}
           </button>
 
           <button
@@ -1398,7 +1375,7 @@ onUnmounted(() => {
             class="rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-slate-300 transition hover:bg-slate-800 hover:text-white"
             @click="clearOutput"
           >
-            Clear
+            {{ t("common.clear") }}
           </button>
         </div>
 
