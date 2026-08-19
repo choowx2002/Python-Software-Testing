@@ -24,6 +24,21 @@ export async function getDatabase(): Promise<Database> {
 export async function initializeDatabase(): Promise<void> {
   const db = await getDatabase()
 
+  // 迁移：coverage_results 曾使用旧结构（execution_id UNIQUE + statement_coverage / cache_file_path 等字段），
+  // 该表从未写入过数据。检测到旧结构则先丢弃，由下方 CREATE TABLE IF NOT EXISTS 以新 schema 重建。
+  try {
+    const rows = await db.select<{ sql: string | null }[]>(
+      `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'coverage_results'`,
+    )
+    const oldSql = rows[0]?.sql ?? ''
+    if (oldSql.includes('cache_file_path')) {
+      await db.execute(`DROP TABLE coverage_results`)
+      console.log('[DB Init] 🔄 coverage_results 已重建为新 schema')
+    }
+  } catch (error) {
+    console.error('[DB Init] ⚠️ coverage_results migration check failed:', error)
+  }
+
   // 建表 SQL（对应 FYP Report Table 5.1 - 5.4）
   const initSQL = `
     -- 1. Projects Table
@@ -70,13 +85,15 @@ export async function initializeDatabase(): Promise<void> {
     -- 4. Coverage Results Table
     CREATE TABLE IF NOT EXISTS coverage_results (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      execution_id INTEGER UNIQUE NOT NULL,
-      statement_coverage REAL NOT NULL,
-      branch_coverage REAL NOT NULL,
-      cache_file_path TEXT NOT NULL,
-      file_format VARCHAR(20) DEFAULT 'JSON',
-      generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (execution_id) REFERENCES test_execution_history(id) ON DELETE CASCADE
+      project_id INTEGER NOT NULL,
+      execution_id INTEGER,
+      total_statement_coverage REAL NOT NULL,
+      total_branch_coverage REAL,
+      file_count INTEGER NOT NULL,
+      covered_file_count INTEGER NOT NULL,
+      detail_json_path TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (project_id) REFERENCES projects(id)
     );
 
     -- 创建索引优化查询性能

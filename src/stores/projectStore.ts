@@ -11,7 +11,7 @@ export interface Project {
   tests_passed: number
   tests_failed: number
   coverage: number
-  last_run: string
+  last_run: string | null
 }
 
 export interface GlobalStats {
@@ -32,16 +32,34 @@ export const useProjectStore = defineStore('project', () => {
   const isLoading = ref(true)
 
   // ==========================================
-  // 1. 获取项目列表 (保持不变)
+  // 1. 获取项目列表（附带真实统计：执行历史 + 覆盖率）
   // ==========================================
   const fetchProjects = async () => {
     isLoading.value = true
     try {
       const db = await getDatabase()
+
+      // 每个项目附带：
+      // - tests_passed / tests_failed：test_execution_history 的累计通过/失败数
+      // - last_run：最近一次执行时间（无记录时为 NULL，前端显示 "Never"）
+      // - coverage：coverage_results 中该项目最新一条的语句覆盖率
       const rows = await db.select<any[]>(`
-        SELECT id, name, project_path AS path, interpreter_path, status AS env_status, created_at
-        FROM projects 
-        ORDER BY created_at DESC
+        SELECT
+          p.id,
+          p.name,
+          p.project_path AS path,
+          p.interpreter_path,
+          p.status AS env_status,
+          p.created_at,
+          COALESCE((SELECT SUM(passed) FROM test_execution_history t WHERE t.project_id = p.id), 0) AS tests_passed,
+          COALESCE((SELECT SUM(failed) FROM test_execution_history t WHERE t.project_id = p.id), 0) AS tests_failed,
+          (SELECT MAX(executed_at) FROM test_execution_history t WHERE t.project_id = p.id) AS last_run,
+          COALESCE((SELECT c.total_statement_coverage
+                     FROM coverage_results c
+                     WHERE c.project_id = p.id
+                     ORDER BY c.id DESC LIMIT 1), 0) AS coverage
+        FROM projects p
+        ORDER BY p.created_at DESC
       `)
 
       projects.value = rows.map(row => ({
@@ -50,17 +68,31 @@ export const useProjectStore = defineStore('project', () => {
         path: row.path,
         interpreter_path: row.interpreter_path,
         env_status: row.env_status || 'Warning',
-        tests_passed: 0,
-        tests_failed: 0,
-        coverage: 0.0,
-        last_run: 'Never'
+        tests_passed: Number(row.tests_passed) || 0,
+        tests_failed: Number(row.tests_failed) || 0,
+        coverage: Number(row.coverage) || 0,
+        last_run: row.last_run ?? null,
       }))
+
+      // 全局统计：总执行次数、平均通过率、平均覆盖率（每个项目取最新一条覆盖率）
+      const statsRows = await db.select<any[]>(`
+        SELECT
+          (SELECT COUNT(*) FROM test_execution_history) AS total_runs,
+          COALESCE((SELECT AVG(
+            CASE WHEN (passed + failed + skipped) > 0
+              THEN passed * 100.0 / (passed + failed + skipped)
+              ELSE NULL END
+          ) FROM test_execution_history), 0) AS avg_pass_rate,
+          COALESCE((SELECT AVG(c.total_statement_coverage)
+            FROM coverage_results c
+            WHERE c.id IN (SELECT MAX(id) FROM coverage_results GROUP BY project_id)), 0) AS avg_coverage
+      `)
 
       stats.value = {
         total_projects: projects.value.length,
-        total_runs: 0,
-        avg_pass_rate: 0,
-        avg_coverage: 0
+        total_runs: Number(statsRows[0]?.total_runs) || 0,
+        avg_pass_rate: Number(statsRows[0]?.avg_pass_rate) || 0,
+        avg_coverage: Number(statsRows[0]?.avg_coverage) || 0,
       }
     } catch (error) {
       console.error('[Store] ❌ Failed to fetch projects:', error)

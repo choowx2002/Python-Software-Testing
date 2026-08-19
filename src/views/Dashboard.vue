@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onMounted, computed, ref } from "vue";
+import { onMounted, computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
+import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../stores/projectStore";
 import {
   FolderPlus,
@@ -83,9 +84,56 @@ const getEnvIcon = (detail: string) => {
 };
 
 // 页面挂载时拉取数据
-onMounted(() => {
-  projectStore.fetchProjects();
+onMounted(async () => {
+  await projectStore.fetchProjects();
+  await refreshPythonVersion();
 });
+
+// 项目列表变化（导入/删除/刷新）后重新探测 Python 环境
+watch(
+  () => projectStore.projects,
+  () => {
+    void refreshPythonVersion();
+  },
+);
+
+// 状态栏 Python 版本：调用 detect_python_env 获取真实版本
+// 取第一个带 interpreter_path 的项目（否则取第一个项目）作为代表环境
+const pythonVersion = ref<string | null>(null);
+const pythonVenv = ref<boolean | null>(null);
+
+async function refreshPythonVersion() {
+  const candidate =
+    projectStore.projects.find((p) => p.interpreter_path) ??
+    projectStore.projects[0];
+
+  if (!candidate?.path) {
+    pythonVersion.value = null;
+    pythonVenv.value = null;
+    return;
+  }
+
+  try {
+    const result = await invoke<{
+      pythonPath: string | null;
+      pythonVersion: string | null;
+      venvPath: string | null;
+      venvExists: boolean;
+      dependencies: {
+        name: string;
+        installed: boolean;
+        version: string | null;
+      }[];
+    }>("detect_python_env", { projectPath: candidate.path });
+
+    pythonVersion.value = result.pythonVersion;
+    pythonVenv.value = result.venvExists;
+  } catch (error) {
+    console.error("[Dashboard] detect_python_env failed:", error);
+    pythonVersion.value = null;
+    pythonVenv.value = null;
+  }
+}
 
 // 路由跳转
 const goToImport = () => router.push("/projects/import");
@@ -340,7 +388,7 @@ const handleDelete = async (projectId: number, projectName: string) => {
               <!-- Last Run -->
               <div class="text-right">
                 <span class="text-[11px] text-slate-500">{{
-                  project.last_run
+                  project.last_run ?? "Never"
                 }}</span>
               </div>
             </div>
@@ -354,7 +402,11 @@ const handleDelete = async (projectId: number, projectName: string) => {
         <div class="flex items-center gap-4">
           <div class="flex items-center gap-1.5">
             <Terminal class="w-3 h-3" />
-            <span class="font-mono">Python 3.13.2 (venv)</span>
+            <span class="font-mono">{{
+              pythonVersion
+                ? `${pythonVersion}${pythonVenv ? " (venv)" : " (global)"}`
+                : "Python not detected"
+            }}</span>
           </div>
           <div class="flex items-center gap-1.5">
             <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>

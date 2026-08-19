@@ -2,7 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
+import { ask } from "@tauri-apps/plugin-dialog";
 import {
   AlertCircle,
   Check,
@@ -26,6 +27,7 @@ import { parseArguments } from "../../../helper/execute";
 import { getDatabase } from "../../../utils/db";
 
 const route = useRoute();
+const router = useRouter();
 const projectStore = useProjectStore();
 
 const projectId = computed(() => Number(route.params.id));
@@ -481,6 +483,27 @@ async function setupTestListeners() {
       currentTest.value = null;
 
       await saveExecutionToDb(event.payload);
+
+      // 有测试通过时，询问是否继续做覆盖率分析
+      if (event.payload.passed > 0) {
+        const runCoverageAnalysis = await ask(
+          "Tests completed. Run coverage analysis?",
+          {
+            title: "Coverage Analysis",
+            kind: "info",
+            okLabel: "Yes",
+            cancelLabel: "No",
+          },
+        );
+
+        if (runCoverageAnalysis) {
+          router.push({
+            name: "ProjectCoverage",
+            params: { id: projectId.value },
+            query: { autoRun: "1" },
+          });
+        }
+      }
 
       if (!event.payload.success && event.payload.results.length === 0) {
         pytestOutput.value.push({
