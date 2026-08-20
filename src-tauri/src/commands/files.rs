@@ -1,18 +1,5 @@
-use crate::state::{process_alive, terminate_pid, AppState};
-use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
-use tokio::process::Command as AsyncCommand;
-use std::process::Stdio;
-use tauri::AppHandle;
-use tauri::Emitter;
-use tauri::Manager;
-use tauri_plugin_dialog::{DialogExt, FilePath};
-use tokio::io::{AsyncBufReadExt, BufReader};
-use uuid::Uuid;
-
-use super::*;
 #[tauri::command]
 pub async fn open_in_file_manager(path: String) -> Result<(), String> {
     let target = std::path::Path::new(&path);
