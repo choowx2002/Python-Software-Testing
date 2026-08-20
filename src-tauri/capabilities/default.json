@@ -10,8 +10,6 @@
         "dialog:allow-open",
         "shell:default",
         "shell:allow-spawn",
-        "shell:allow-execute",
-        "fs:default",
         "fs:allow-read",
         "sql:default",
         "store:default",
@@ -20,12 +18,12 @@
         "sql:allow-select",
         "core:window:allow-start-dragging",
         {
-      "identifier": "opener:allow-open-path",
-      "allow": [
-        {
-          "path": "/**"
+            "identifier": "opener:allow-open-path",
+            "allow": [
+                { "path": "$HOME/**" },
+                { "path": "$APPDATA/**" },
+                { "path": "$TEMP/**" }
+            ]
         }
-      ]
-    }
     ]
 }
