@@ -57,7 +57,7 @@ const isSelected = computed(() =>
           <ChevronRight v-else class="h-3.5 w-3.5 text-slate-500" />
         </button>
 
-        <FolderOpen v-if="isExpanded" class="h-4 w-4 shrink-0 text-violet-500" />
+        <FolderOpen v-if="isExpanded" class="h-4 w-4 shrink-0 text-brand-500" />
         <Folder v-else class="h-4 w-4 shrink-0 text-slate-400" />
 
         <button
@@ -77,7 +77,7 @@ const isSelected = computed(() =>
           class="flex h-4 w-4 shrink-0 items-center justify-center rounded border transition disabled:cursor-not-allowed"
           :class="
             isSelected
-              ? 'border-violet-500 bg-violet-500 text-white'
+              ? 'border-brand-500 bg-brand-500 text-white'
               : 'border-slate-300 bg-white'
           "
           @click="emit('toggle-file', node.relativePath)"

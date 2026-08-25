@@ -1,35 +1,42 @@
 <script setup lang="ts">
+/**
+ * Generate —— 测试生成页（彻底重构版）
+ * 设计：单一主流程
+ *   ① 主卡两栏：左 = 源文件树（搜索 + 全选），右 = 设置（3 项基础 + 高级折叠）
+ *   ② 生成运行区：大按钮 + 进度 + 当前文件 + 终端日志
+ *   ③ 完成：结论横幅 + 生成文件列表 + 行内操作
+ * 所有业务逻辑（Pynguin 事件流 / 源扫描 / 历史持久化）保持不变。
+ */
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useRoute } from "vue-router";
 import {
   AlertCircle,
-  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Circle,
   CircleDot,
-  ClipboardCopy,
-  Clock3,
-  Code2,
   Copy,
-  ExternalLink,
-  FileCode2,
   Folder,
   FolderOpen,
-  RefreshCw,
+  Loader2,
   Search,
   Settings2,
-  Sparkles,
   Square,
   Timer,
+  WandSparkles,
+  X,
   XCircle,
 } from "@lucide/vue";
 import { useProjectStore } from "../../../stores/projectStore";
 import TreeItem from "../../../components/TreeItem.vue";
 import { useI18n } from "vue-i18n";
+import AppButton from "../../../components/ui/AppButton.vue";
+import AppConfirmModal from "../../../components/ui/AppConfirmModal.vue";
+import StatusPill from "../../../components/ui/StatusPill.vue";
+import EnvFixWizard from "../../../components/EnvFixWizard.vue";
 
 const route = useRoute();
 const projectStore = useProjectStore();
@@ -128,6 +135,71 @@ const populationSize = ref(50);
 
 const generationOutput = ref<GenerationOutputEvent[]>([]);
 const showGenerationLog = ref(false);
+
+/* UTF-8 BOM 检测（Pynguin 无法解析带 BOM 的源码） */
+const bomFiles = ref<string[]>([]);
+const showBomModal = ref(false);
+
+/* 生成环境健康检查（Python / pynguin / bytecode 版本） */
+interface GenerationEnv {
+  pythonVersion: string;
+  pynguinVersion: string | null;
+  bytecodeVersion: string | null;
+}
+const genEnv = ref<GenerationEnv | null>(null);
+const envIssueDismissed = ref(false);
+
+async function refreshGenEnv() {
+  const interpreterPath = currentProject.value?.interpreter_path;
+  if (!interpreterPath) return;
+
+  try {
+    genEnv.value = await invoke<GenerationEnv>("check_generation_env", {
+      interpreterPath,
+    });
+  } catch (error) {
+    console.error("[Generate] check_generation_env failed:", error);
+  }
+}
+
+/** 环境问题清单（生成前提前提示，替代踩坑后才知道） */
+const envIssues = computed(() => {
+  const issues: { level: "warning" | "error"; text: string }[] = [];
+  const env = genEnv.value;
+  if (!env) return issues;
+
+  // pynguin 未安装 → 无法生成（硬性）
+  if (!env.pynguinVersion) {
+    issues.push({ level: "error", text: t("generate.envNoPynguin") });
+    return issues;
+  }
+
+  const parts = env.pythonVersion.split(".").map(Number);
+  const isPy312Plus = parts[0] === 3 && parts[1] >= 12;
+
+  if (isPy312Plus) {
+    issues.push({ level: "warning", text: t("generate.envPy312Hint") });
+    if (env.bytecodeVersion === "0.17.0") {
+      issues.push({ level: "warning", text: t("generate.envBytecodeHint") });
+    }
+  }
+
+  return issues;
+});
+
+/** 是否处于 Python 3.12+（显示一键换 3.11 的入口） */
+const isPy312Risk = computed(() => {
+  const env = genEnv.value;
+  if (!env) return false;
+  const parts = env.pythonVersion.split(".").map(Number);
+  return parts[0] === 3 && parts[1] >= 12;
+});
+
+/** 一键修复完成后：刷新项目解释器信息 + 重新体检 */
+async function onEnvFixed() {
+  await projectStore.fetchProjects();
+  void refreshGenEnv();
+}
 
 const currentRunId = ref<string | null>(null);
 const currentFile = ref<string | null>(null);
@@ -263,19 +335,6 @@ const allVisibleSelected = computed(() => {
   );
 });
 
-function toggleVisibleSelection() {
-  if (allVisibleSelected.value) {
-    const visiblePaths = new Set(
-      filteredSourceFiles.value.map((f) => f.relativePath),
-    );
-    selectedSourceFiles.value = selectedSourceFiles.value.filter(
-      (p) => !visiblePaths.has(p),
-    );
-  } else {
-    selectAllVisible();
-  }
-}
-
 /* -------------------------------------------------------------------------- */
 /* Computed                                                                   */
 /* -------------------------------------------------------------------------- */
@@ -303,29 +362,17 @@ const statusText = computed(() => {
   }
 });
 
-const statusIcon = computed(() => {
+/** 页头 StatusPill 状态映射 */
+const statusPillStatus = computed(() => {
   switch (generationStatus.value) {
     case "running":
-      return Sparkles;
+      return "running";
     case "completed":
-      return CheckCircle2;
+      return "completed";
     case "failed":
-      return XCircle;
+      return "Failed";
     default:
-      return AlertCircle;
-  }
-});
-
-const statusClass = computed(() => {
-  switch (generationStatus.value) {
-    case "running":
-      return "border-violet-200 bg-violet-50 text-violet-700";
-    case "completed":
-      return "border-emerald-200 bg-emerald-50 text-emerald-700";
-    case "failed":
-      return "border-rose-200 bg-rose-50 text-rose-700";
-    default:
-      return "border-slate-200 bg-slate-50 text-slate-600";
+      return "idle";
   }
 });
 
@@ -341,6 +388,21 @@ const hasResult = computed(() => {
   return (
     generationStatus.value === "completed" ||
     generationStatus.value === "failed"
+  );
+});
+
+/**
+ * Pynguin 兼容性问题检测：
+ * 0.43+ 在 Python 3.12 上存在插桩缺陷（上游 bug），表现为
+ * "Failed to compute stacksize" / "Failed to load SUT" /
+ * controlflow.py 的 AssertionError，即使生成了文件也是无效产物。
+ */
+const hasPynguinCompatIssue = computed(() => {
+  const text = generationOutput.value.map((o) => o.line).join("\n");
+  return (
+    /Failed to compute stacksize/.test(text) ||
+    /Failed to load SUT/.test(text) ||
+    (/AssertionError/.test(text) && /instrumentation|controlflow/.test(text))
   );
 });
 
@@ -460,6 +522,24 @@ async function setupGenerationListeners() {
         });
         showGenerationLog.value = true;
       }
+
+      // 持久化生成历史（NFR008：走 Rust 类型化命令）
+      if (currentProject.value?.id) {
+        const generatedCount = event.payload.generatedFiles.filter(
+          (f) => f.status === "success",
+        ).length;
+        void invoke("save_generation_history", {
+          projectId: currentProject.value.id,
+          generationStatus: event.payload.success ? "success" : "failed",
+          totalFiles: event.payload.generatedFiles.length,
+          generatedFiles: generatedCount,
+          duration: event.payload.duration,
+          command: event.payload.command || null,
+        }).catch((e) => console.error("[Generate] save history failed:", e));
+      }
+
+      // 生成结束后刷新环境状态（用户可能中途修复了依赖）
+      void refreshGenEnv();
     },
   );
 }
@@ -507,6 +587,55 @@ async function generateTests() {
 
   if (!projectPath || !interpreterPath) return;
 
+  // 源文件 BOM 检查：Pynguin 用 ast.parse(字符串) 解析源码，
+  // 带 UTF-8 BOM 的文件会触发 "invalid non-printable character U+FEFF"
+  try {
+    const found = await invoke<string[]>("check_python_bom", {
+      projectPath,
+      files: selectedSourceFiles.value,
+    });
+    if (found.length > 0) {
+      bomFiles.value = found;
+      showBomModal.value = true;
+      return; // 等待用户确认是否自动修复
+    }
+  } catch (error) {
+    console.error("[Generate] check_python_bom failed:", error);
+  }
+
+  await startGeneration(projectPath, interpreterPath);
+}
+
+/** 用户确认修复 BOM 后：无损移除 → 继续生成 */
+async function confirmFixBom() {
+  showBomModal.value = false;
+
+  const projectPath = currentProject.value?.path;
+  const interpreterPath = currentProject.value?.interpreter_path;
+  if (!projectPath || !interpreterPath) return;
+
+  try {
+    const fixed = await invoke<string[]>("strip_python_bom", {
+      projectPath,
+      files: selectedSourceFiles.value,
+    });
+    if (fixed.length > 0) {
+      generationOutput.value.push({
+        runId: "system",
+        stream: "stdout",
+        line: t("generate.bomFixed", { count: fixed.length }),
+        logId: logCounter++,
+      });
+    }
+  } catch (error) {
+    console.error("[Generate] strip_python_bom failed:", error);
+  }
+
+  await startGeneration(projectPath, interpreterPath);
+}
+
+/** 实际启动 Pynguin 生成 */
+async function startGeneration(projectPath: string, interpreterPath: string) {
   resetGenerationState();
 
   try {
@@ -639,6 +768,17 @@ function getGeneratedFileClass(status: GeneratedFile["status"]) {
   }
 }
 
+function fileStatusLabel(status: GeneratedFile["status"]) {
+  switch (status) {
+    case "success":
+      return t("generate.results.status.success");
+    case "empty":
+      return t("generate.results.status.empty");
+    case "failed":
+      return t("generate.results.status.failed");
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Watchers / lifecycle                                                       */
 /* -------------------------------------------------------------------------- */
@@ -658,8 +798,10 @@ watch(
     resetGenerationState();
     selectedSourceFiles.value = [];
     sourceSearch.value = "";
+    envIssueDismissed.value = false;
 
     await scanSourceFiles();
+    void refreshGenEnv();
   },
   {
     immediate: true,
@@ -679,23 +821,19 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex min-h-full flex-col gap-5 pb-8">
-    <!-- Header -->
+  <div class="flex min-h-full flex-col gap-4 p-5">
+    <!-- 页头 -->
     <header class="flex items-start justify-between gap-4">
       <div class="min-w-0">
         <div class="flex items-center gap-3">
           <div
-            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-600"
+            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-500"
           >
-            <Sparkles class="h-4 w-4" />
+            <WandSparkles class="h-4 w-4" />
           </div>
-
           <div class="min-w-0">
-            <h1 class="text-lg font-semibold text-slate-900">
-              {{ t("generate.title") }}
-            </h1>
-
-            <p class="mt-0.5 truncate text-xs text-slate-500">
+            <h1 class="text-lg font-semibold text-zinc-900">{{ t("generate.title") }}</h1>
+            <p class="mt-0.5 truncate text-xs text-zinc-500">
               {{
                 currentProject?.name
                   ? t("generate.subtitle", { name: currentProject.name })
@@ -705,157 +843,131 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
-
-      <div
-        class="inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium"
-        :class="statusClass"
-      >
-        <component
-          :is="statusIcon"
-          class="h-3.5 w-3.5"
-          :class="{ 'animate-pulse': generationStatus === 'running' }"
-        />
-
-        {{ statusText }}
-      </div>
+      <StatusPill :status="statusPillStatus" :label="statusText" :pulse="isGenerating" />
     </header>
 
-    <!-- Main Grid: Source Selection + Configuration -->
-    <section class="grid grid-cols-1 gap-5 lg:grid-cols-2">
-      <!-- Source Selection -->
-      <div class="rounded-2xl border border-slate-200 bg-white">
-        <div
-          class="flex items-center justify-between gap-4 border-b border-slate-200 px-5 py-4"
-        >
-          <div>
-            <div class="flex items-center gap-2">
-              <FolderOpen class="h-4 w-4 text-slate-500" />
+    <!-- 生成环境提示（Pynguin / Python 兼容性问题，提前预警，可关闭） -->
+    <div
+      v-if="envIssues.length > 0 && !envIssueDismissed"
+      class="rounded-lg border px-4 py-3"
+      :class="
+        envIssues.some((i) => i.level === 'error')
+          ? 'border-rose-200 bg-rose-50'
+          : 'border-amber-200 bg-amber-50'
+      "
+    >
+      <div class="flex items-start gap-3">
+        <AlertCircle
+          class="mt-0.5 h-4 w-4 shrink-0"
+          :class="
+            envIssues.some((i) => i.level === 'error')
+              ? 'text-rose-600'
+              : 'text-amber-600'
+          "
+        />
+        <div class="min-w-0 flex-1 space-y-1">
+          <p
+            v-for="(issue, i) in envIssues"
+            :key="i"
+            class="text-xs leading-5"
+            :class="issue.level === 'error' ? 'text-rose-700' : 'text-amber-700'"
+          >
+            {{ issue.text }}
+          </p>
+          <p v-if="genEnv" class="font-mono text-[10px] text-zinc-400">
+            Python {{ genEnv.pythonVersion }} · pynguin {{ genEnv.pynguinVersion ?? "—" }} ·
+            bytecode {{ genEnv.bytecodeVersion ?? "—" }}
+          </p>
 
-              <h2 class="text-sm font-semibold text-slate-900">
+          <!-- 一键换 Python 3.11（修复 Pynguin 兼容性问题） -->
+          <div v-if="isPy312Risk && genEnv?.pynguinVersion && currentProject?.path" class="mt-2">
+            <EnvFixWizard
+              :project-path="currentProject.path"
+              :project-id="currentProject.id"
+              @fixed="onEnvFixed"
+            />
+          </div>
+        </div>
+        <button
+          type="button"
+          class="shrink-0 rounded p-1 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-600"
+          :aria-label="t('common.close')"
+          @click="envIssueDismissed = true"
+        >
+          <X class="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+
+    <!-- ══════════ 主卡：源文件（左） + 设置（右） ══════════ -->
+    <section class="card overflow-hidden">
+      <div class="grid min-h-0 grid-cols-1 lg:grid-cols-[1fr_360px]">
+        <!-- 左：源文件树 -->
+        <div class="min-h-0 border-b border-border lg:border-b-0 lg:border-r">
+          <div class="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+            <div class="min-w-0">
+              <h2 class="text-sm font-semibold text-zinc-900">
                 {{ t("generate.selectSource") }}
               </h2>
+              <p class="mt-0.5 text-xs text-zinc-500">{{ t("generate.selectSourceDesc") }}</p>
             </div>
-
-            <p class="mt-1 text-xs text-slate-500">
-              {{ t("generate.selectSourceDesc") }}
-            </p>
+            <span
+              class="shrink-0 rounded-full bg-zinc-100 px-2 py-0.5 font-mono text-[10px] text-zinc-500"
+            >
+              {{ t("generate.selectedCount", { count: selectedCount }) }}
+            </span>
           </div>
 
-          <button
-            type="button"
-            :disabled="isLoadingSources || isGenerating"
-            class="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-            @click="scanSourceFiles"
-          >
-            <RefreshCw
-              class="h-3.5 w-3.5"
-              :class="{ 'animate-spin': isLoadingSources }"
-            />
-
-            {{ isLoadingSources ? t("generate.scanning") : t("common.refresh") }}
-          </button>
-        </div>
-
-        <div class="p-5">
-          <!-- Search -->
-          <div class="relative mb-3">
-            <Search
-              class="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400"
-            />
-
-            <input
-              v-model="sourceSearch"
-              type="text"
-              :placeholder="t('generate.searchPlaceholder')"
-              :disabled="isGenerating"
-              class="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-xs text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-violet-400 focus:ring-2 focus:ring-violet-100 disabled:bg-slate-50"
-            />
-          </div>
-
-          <!-- Selection summary -->
-          <div
-            class="mb-3 flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"
-          >
-            <div class="flex items-center gap-2">
-              <button
-                type="button"
-                :disabled="isGenerating || filteredSourceFiles.length === 0"
-                class="flex h-4 w-4 items-center justify-center rounded border transition disabled:cursor-not-allowed"
-                :class="
-                  allVisibleSelected
-                    ? 'border-violet-500 bg-violet-500 text-white'
-                    : 'border-slate-300 bg-white'
-                "
-                @click="toggleVisibleSelection"
-              >
-                <Check v-if="allVisibleSelected" class="h-3 w-3" />
-              </button>
-
-              <span class="text-xs font-medium text-slate-600">
-                {{ t("generate.selectedCount", { count: selectedCount }) }}
-              </span>
+          <div class="flex items-center gap-2 border-b border-border px-3 py-2">
+            <div class="relative min-w-0 flex-1">
+              <Search
+                class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400"
+              />
+              <input
+                v-model="sourceSearch"
+                type="text"
+                :placeholder="t('generate.searchPlaceholder')"
+                :disabled="isGenerating"
+                class="input h-8 pl-8 pr-3"
+              />
             </div>
+            <AppButton
+              variant="ghost"
+              size="sm"
+              :disabled="isGenerating || filteredSourceFiles.length === 0 || allVisibleSelected"
+              @click="selectAllVisible"
+            >
+              {{ t("common.selectAll") }}
+            </AppButton>
+            <AppButton
+              variant="ghost"
+              size="sm"
+              :disabled="isGenerating || selectedCount === 0"
+              @click="clearSelection"
+            >
+              {{ t("common.clear") }}
+            </AppButton>
+          </div>
 
-            <div class="flex items-center gap-2">
-              <button
-                type="button"
-                :disabled="
-                  isGenerating ||
-                  filteredSourceFiles.length === 0 ||
-                  allVisibleSelected
-                "
-                class="rounded-lg px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
-                @click="selectAllVisible"
-              >
-                {{ t("generate.selectAll") }}
-              </button>
-
-              <button
-                type="button"
-                :disabled="isGenerating || selectedCount === 0"
-                class="rounded-lg px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
-                @click="clearSelection"
-              >
-                {{ t("generate.clear") }}
-              </button>
+          <div class="max-h-80 overflow-auto">
+            <div v-if="isLoadingSources" class="px-4 py-10 text-center text-sm text-zinc-500">
+              <Loader2 class="mx-auto mb-2 h-5 w-5 animate-spin" />
+              {{ t("generate.scanningSources") }}
             </div>
-          </div>
-
-          <!-- Tree -->
-          <div
-            v-if="isLoadingSources"
-            class="px-5 py-10 text-center text-sm text-slate-500"
-          >
-            {{ t("generate.scanningSources") }}
-          </div>
-
-          <div
-            v-else-if="sourceScanError"
-            class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"
-          >
-            {{ sourceScanError }}
-          </div>
-
-          <div v-else-if="sourceFiles.length === 0" class="px-5 py-10 text-center">
-            <div class="text-sm font-medium text-slate-700">
-              {{ t("generate.noSources") }}
+            <div
+              v-else-if="sourceScanError"
+              class="m-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700"
+            >
+              {{ sourceScanError }}
             </div>
-
-            <div class="mt-1 text-xs text-slate-500">
-              {{ t("generate.noSourcesDesc") }}
+            <div v-else-if="sourceTree.length === 0" class="px-4 py-10 text-center">
+              <div class="text-sm font-medium text-zinc-700">{{ t("generate.noSources") }}</div>
+              <div class="mt-1 text-xs text-zinc-500">{{ t("generate.noSourcesDesc") }}</div>
             </div>
-          </div>
-
-          <div
-            v-else-if="filteredSourceFiles.length === 0"
-            class="px-5 py-10 text-center text-sm text-slate-500"
-          >
-            {{ t("generate.noSearchResults") }}
-          </div>
-
-          <div v-else class="max-h-96 overflow-auto rounded-xl border border-slate-200">
-            <template v-for="node in sourceTree" :key="node.id">
+            <div v-else class="py-1">
               <TreeItem
+                v-for="node in sourceTree"
+                :key="node.id"
                 :node="node"
                 :expanded-dirs="expandedDirs"
                 :selected-files="selectedSourceFiles"
@@ -863,109 +975,85 @@ onUnmounted(() => {
                 @toggle-dir="toggleDir"
                 @toggle-file="toggleFile"
               />
-            </template>
+            </div>
           </div>
         </div>
-      </div>
 
-      <!-- Configuration -->
-      <div class="rounded-2xl border border-slate-200 bg-white">
-        <div class="border-b border-slate-200 px-5 py-4">
+        <!-- 右：设置 -->
+        <div class="min-h-0 p-4">
           <div class="flex items-center gap-2">
-            <Settings2 class="h-4 w-4 text-slate-500" />
-
-            <h2 class="text-sm font-semibold text-slate-900">
-              {{ t("generate.configTitle") }}
-            </h2>
+            <Settings2 class="h-4 w-4 text-zinc-400" />
+            <h2 class="text-sm font-semibold text-zinc-900">{{ t("generate.configTitle") }}</h2>
           </div>
+          <p class="mt-1 text-xs text-zinc-500">{{ t("generate.configDesc") }}</p>
 
-          <p class="mt-1 text-xs text-slate-500">
-            Configure how Pynguin generates the tests.
-          </p>
-        </div>
-
-        <div class="p-5">
-          <div class="space-y-5">
-            <!-- Max Search Time -->
+          <div class="mt-4 space-y-4">
+            <!-- 每个文件的用时 -->
             <div>
               <div class="mb-2 flex items-center justify-between">
-                <label class="text-xs font-medium text-slate-700">
+                <label class="text-xs font-medium text-zinc-700" for="max-search-time">
                   {{ t("generate.timeLimit") }}
                 </label>
-
-                <div class="flex items-center gap-1 text-xs text-slate-500">
+                <span class="flex items-center gap-1 text-xs text-zinc-500">
                   <Timer class="h-3 w-3" />
-                  <span>{{ t("generate.perFile") }}</span>
-                </div>
+                  {{ t("generate.perFile") }}
+                </span>
               </div>
-
               <div class="flex items-center gap-2">
                 <input
+                  id="max-search-time"
                   v-model.number="maxSearchTime"
                   type="number"
                   min="1"
                   max="3600"
                   :disabled="isGenerating"
-                  class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100 disabled:bg-slate-50"
+                  class="input"
                 />
-
-                <span class="shrink-0 text-xs text-slate-500">{{ t("generate.timeLimitUnit") }}</span>
+                <span class="shrink-0 text-xs text-zinc-500">{{ t("generate.timeLimitUnit") }}</span>
               </div>
-
-              <p class="mt-1.5 text-[11px] text-slate-400">
+              <p class="mt-1.5 text-[11px] text-zinc-400">
                 {{ t("generate.estimatedTotal", { seconds: estimatedTimeout }) }}
               </p>
             </div>
 
-            <!-- Algorithm -->
+            <!-- 策略 -->
             <div>
-              <label class="mb-2 block text-xs font-medium text-slate-700">
+              <label class="mb-2 block text-xs font-medium text-zinc-700">
                 {{ t("generate.algorithm") }}
               </label>
-
               <div class="grid grid-cols-2 gap-2">
                 <button
                   v-for="alg in (['MOSA', 'DYNAMOSA', 'WSPA', 'RANDOM'] as Algorithm[])"
                   :key="alg"
                   type="button"
                   :disabled="isGenerating"
-                  class="flex items-center gap-2 rounded-xl border px-3 py-2.5 text-left text-sm transition disabled:cursor-not-allowed"
+                  class="flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition disabled:cursor-not-allowed"
                   :class="
                     algorithm === alg
-                      ? 'border-violet-300 bg-violet-50 text-violet-700'
-                      : 'border-slate-200 text-slate-700 hover:bg-slate-50'
+                      ? 'border-brand-200 bg-brand-50 text-brand-700'
+                      : 'border-border text-zinc-700 hover:bg-zinc-50'
                   "
                   @click="algorithm = alg"
                 >
-                  <CircleDot
-                    v-if="algorithm === alg"
-                    class="h-4 w-4 text-violet-600"
-                  />
-                  <Circle v-else class="h-4 w-4 text-slate-300" />
+                  <CircleDot v-if="algorithm === alg" class="h-3.5 w-3.5 text-brand-600" />
+                  <Circle v-else class="h-3.5 w-3.5 text-zinc-300" />
                   <span class="font-medium">{{ alg }}</span>
                 </button>
               </div>
+              <p class="mt-1.5 text-[11px] text-zinc-400">{{ t("generate.algorithmHint") }}</p>
             </div>
 
-            <!-- Assertion Generation -->
-            <div
-              class="flex items-center justify-between rounded-xl border border-slate-200 px-4 py-3"
-            >
-              <div>
-                <div class="text-sm font-medium text-slate-900">
-                  {{ t("generate.assertGen") }}
-                </div>
-
-                <div class="mt-0.5 text-xs text-slate-500">
-                  {{ t("generate.assertGenDesc") }}
-                </div>
+            <!-- 生成检查 -->
+            <div class="flex items-center justify-between gap-3 rounded-lg border border-border px-3.5 py-3">
+              <div class="min-w-0">
+                <div class="text-[13px] font-medium text-zinc-900">{{ t("generate.assertGen") }}</div>
+                <div class="mt-0.5 text-[11px] text-zinc-500">{{ t("generate.assertGenDesc") }}</div>
               </div>
-
               <button
                 type="button"
                 :disabled="isGenerating"
                 class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition disabled:cursor-not-allowed"
-                :class="assertionGeneration ? 'bg-violet-500' : 'bg-slate-200'"
+                :class="assertionGeneration ? 'bg-brand-500' : 'bg-zinc-200'"
                 @click="assertionGeneration = !assertionGeneration"
               >
                 <span
@@ -975,100 +1063,91 @@ onUnmounted(() => {
               </button>
             </div>
 
-            <!-- Max Test Cases -->
-            <div>
-              <label class="mb-2 block text-xs font-medium text-slate-700">
-                {{ t("generate.maxTestCases") }}
-              </label>
-
-              <input
-                v-model.number="maxTestCases"
-                type="number"
-                min="1"
-                max="500"
-                :disabled="isGenerating"
-                class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100 disabled:bg-slate-50"
-              />
-
-              <p class="mt-1.5 text-[11px] text-slate-400">
-                {{ t("generate.maxTestCasesDesc") }}
-              </p>
-            </div>
-
-            <!-- Output Folder -->
-            <div>
-              <label class="mb-2 block text-xs font-medium text-slate-700">
-                {{ t("generate.outputFolder") }}
-              </label>
-
-              <input
-                v-model="outputFolder"
-                type="text"
-                placeholder="tests/generated"
-                :disabled="isGenerating"
-                class="w-full rounded-xl border border-slate-200 px-3 py-2.5 font-mono text-xs text-slate-700 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100 disabled:bg-slate-50"
-              />
-
-              <p class="mt-1.5 text-[11px] text-slate-400">
-                {{ t("generate.outputFolderDesc") }}
-              </p>
-            </div>
-
-            <!-- Advanced -->
-            <div class="border-t border-slate-100 pt-4">
+            <!-- 高级选项 -->
+            <div class="border-t border-border pt-3">
               <button
                 type="button"
-                class="flex items-center gap-2 text-xs font-medium text-slate-600 transition hover:text-slate-900"
+                class="flex items-center gap-2 text-xs font-medium text-zinc-600 transition hover:text-zinc-900"
                 @click="showAdvanced = !showAdvanced"
               >
                 <ChevronDown v-if="showAdvanced" class="h-4 w-4" />
                 <ChevronRight v-else class="h-4 w-4" />
-
                 {{ t("execute.advancedOptions") }}
               </button>
 
-              <div v-if="showAdvanced" class="mt-4 space-y-4">
+              <div v-if="showAdvanced" class="mt-3 space-y-3">
                 <div>
-                  <label class="mb-2 block text-xs font-medium text-slate-700">
+                  <label class="mb-2 block text-xs font-medium text-zinc-700">
                     {{ t("generate.seed") }}
-                    <span class="text-slate-400">({{ t("common.optional") }})</span>
+                    <span class="text-zinc-400">({{ t("common.optional") }})</span>
                   </label>
-
                   <input
                     v-model.number="seed"
                     type="number"
                     placeholder="None"
                     :disabled="isGenerating"
-                    class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100 disabled:bg-slate-50"
+                    class="input"
                   />
+                  <p class="mt-1 text-[11px] text-zinc-400">{{ t("generate.seedDesc") }}</p>
                 </div>
 
                 <div>
-                  <label class="mb-2 block text-xs font-medium text-slate-700">
+                  <label class="mb-2 block text-xs font-medium text-zinc-700">
                     {{ t("generate.chromosomeLength") }}
                   </label>
-
                   <input
                     v-model.number="chromosomeLength"
                     type="number"
                     min="1"
                     :disabled="isGenerating"
-                    class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100 disabled:bg-slate-50"
+                    class="input"
                   />
+                  <p class="mt-1 text-[11px] text-zinc-400">
+                    {{ t("generate.chromosomeLengthDesc") }}
+                  </p>
                 </div>
 
                 <div>
-                  <label class="mb-2 block text-xs font-medium text-slate-700">
+                  <label class="mb-2 block text-xs font-medium text-zinc-700">
                     {{ t("generate.populationSize") }}
                   </label>
-
                   <input
                     v-model.number="populationSize"
                     type="number"
                     min="1"
                     :disabled="isGenerating"
-                    class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100 disabled:bg-slate-50"
+                    class="input"
                   />
+                  <p class="mt-1 text-[11px] text-zinc-400">{{ t("generate.populationSizeDesc") }}</p>
+                </div>
+
+                <div>
+                  <label class="mb-2 block text-xs font-medium text-zinc-700">
+                    {{ t("generate.maxTestCases") }}
+                  </label>
+                  <input
+                    v-model.number="maxTestCases"
+                    type="number"
+                    min="1"
+                    max="500"
+                    :disabled="isGenerating"
+                    class="input"
+                  />
+                  <p class="mt-1 text-[11px] text-zinc-400">{{ t("generate.maxTestCasesDesc") }}</p>
+                </div>
+
+                <div>
+                  <label class="mb-2 block text-xs font-medium text-zinc-700">
+                    {{ t("generate.outputFolder") }}
+                  </label>
+                  <input
+                    v-model="outputFolder"
+                    type="text"
+                    placeholder="tests/generated"
+                    :disabled="isGenerating"
+                    class="input font-mono"
+                  />
+                  <p class="mt-1 text-[11px] text-zinc-400">{{ t("generate.outputFolderDesc") }}</p>
                 </div>
               </div>
             </div>
@@ -1077,133 +1156,117 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <!-- Generate Button -->
-    <section class="rounded-2xl border border-slate-200 bg-white p-5">
-      <div class="flex items-center justify-between gap-4">
-        <div>
-          <div class="text-sm font-semibold text-slate-900">
-            {{ t("generate.generateTests") }}
-          </div>
-
-          <div class="mt-1 text-xs text-slate-500">
+    <!-- ══════════ 生成运行区 ══════════ -->
+    <section class="card">
+      <div class="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+        <div class="min-w-0">
+          <h2 class="text-sm font-semibold text-zinc-900">{{ t("generate.generateTests") }}</h2>
+          <p class="mt-0.5 text-xs text-zinc-500">
             {{
-              selectedCount > 0
-                ? t("generate.generateSelectedDesc", { count: selectedCount, seconds: estimatedTimeout })
+              canGenerate
+                ? t("generate.generateSelectedDesc", {
+                    count: selectedCount,
+                    seconds: estimatedTimeout,
+                  })
                 : t("generate.generateDesc")
             }}
-          </div>
+          </p>
         </div>
-
-        <button
-          v-if="isGenerating"
-          type="button"
-          class="inline-flex items-center gap-2 rounded-xl bg-rose-500 px-6 py-3 text-sm font-medium text-white transition hover:bg-rose-600"
-          @click="stopGeneration"
-        >
-          <Square class="h-4 w-4" />
-          {{ t("generate.stop") }}
-        </button>
-
-        <button
-          v-else
-          type="button"
-          :disabled="!canGenerate"
-          class="inline-flex items-center gap-2 rounded-xl bg-violet-500 px-6 py-3 text-sm font-medium text-white transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-50"
-          @click="generateTests"
-        >
-          <Sparkles class="h-4 w-4" />
-          {{ t("generate.generateTests") }}
-        </button>
-      </div>
-    </section>
-
-    <!-- Progress -->
-    <section v-if="generationStatus === 'running'" class="rounded-2xl border border-violet-200 bg-white">
-      <div
-        class="flex items-center justify-between gap-4 border-b border-slate-200 px-5 py-4"
-      >
-        <div>
-          <div class="text-sm font-semibold text-slate-900">
-            {{ t("generate.progress.title") }}
-          </div>
-
-          <div class="mt-1 text-xs text-slate-500">
-            {{ t("generate.progress.desc") }}
-          </div>
-        </div>
-
-        <div class="text-xs font-medium text-violet-600">
-          {{ t("generate.progress.filesDone", { completed: completedFiles, total: totalFiles }) }}
+        <div class="flex shrink-0 items-center gap-2">
+          <AppButton v-if="isGenerating" variant="danger" @click="stopGeneration">
+            <Square class="h-4 w-4" />
+            {{ t("generate.stop") }}
+          </AppButton>
+          <AppButton v-else variant="primary" :disabled="!canGenerate" @click="generateTests">
+            <WandSparkles class="h-4 w-4" />
+            {{ t("generate.generateTests") }}
+          </AppButton>
         </div>
       </div>
 
-      <div class="p-5">
+      <!-- 进度（运行中） -->
+      <div v-if="isGenerating" class="border-t border-border px-5 py-4">
         <div class="flex items-end justify-between gap-4">
-          <div>
-            <div class="text-sm font-semibold text-slate-900">
+          <div class="min-w-0">
+            <div class="text-sm font-semibold text-zinc-900">
               {{ t("generate.progress.generating") }}
             </div>
-
-            <div class="mt-1 text-xs text-slate-500">
+            <div class="mt-0.5 text-xs text-zinc-500">
               {{ t("generate.progress.filesProcessed", { completed: completedFiles, total: totalFiles }) }}
             </div>
           </div>
-
-          <div class="text-2xl font-semibold text-slate-900">{{ progress }}%</div>
+          <div class="text-2xl font-semibold text-zinc-900">{{ progress }}%</div>
         </div>
-
-        <div class="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
+        <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-zinc-100">
           <div
-            class="h-full rounded-full bg-violet-500 transition-all duration-300"
+            class="h-full rounded-full bg-brand-500 transition-all duration-300"
             :style="{ width: `${progress}%` }"
           />
         </div>
-
-        <div class="mt-5 grid grid-cols-2 gap-3">
-          <div class="rounded-xl border border-violet-100 bg-violet-50 p-4">
-            <div class="text-xs text-violet-700">{{ t("generate.progress.currentFile") }}</div>
-
-            <div class="mt-1 truncate font-mono text-xs font-medium text-violet-800">
-              {{ currentFile ?? t("generate.progress.preparing") }}
-            </div>
-          </div>
-
-          <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
-            <div class="text-xs text-slate-600">{{ t("generate.progress.elapsedTime") }}</div>
-
-            <div class="mt-1 flex items-center gap-1.5 text-xl font-semibold text-slate-700">
-              <Clock3 class="h-4 w-4" />
-              {{ elapsedTime.toFixed(1) }}s
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Generated Files -->
-    <section v-if="hasResult" class="rounded-2xl border border-slate-200 bg-white">
-      <div class="border-b border-slate-200 px-5 py-4">
-        <div class="flex items-center justify-between gap-4">
-          <div>
-            <div class="text-sm font-semibold text-slate-900">
-              {{ t("generate.results.title") }}
-            </div>
-
-            <div class="mt-1 text-xs text-slate-500">
-              {{ t("generate.results.desc") }}
-            </div>
-          </div>
-
-          <span class="text-xs font-medium text-slate-500">
-            {{ lastRunSummary }}
-          </span>
-        </div>
-      </div>
-
-      <div class="p-5">
-        <!-- Conclusion -->
         <div
-          class="rounded-2xl border p-5"
+          v-if="currentFile"
+          class="mt-3 flex items-center gap-2 rounded-lg border border-brand-100 bg-brand-50 px-3 py-2"
+        >
+          <Loader2 class="h-3.5 w-3.5 shrink-0 animate-spin text-brand-600" />
+          <span class="truncate font-mono text-[11px] text-brand-800">{{ currentFile }}</span>
+        </div>
+      </div>
+
+      <!-- 终端日志（运行中自动显示） -->
+      <div v-if="isGenerating || generationOutput.length > 0" class="border-t border-border">
+        <div class="flex items-center justify-between gap-3 bg-zinc-950 px-4 py-2">
+          <span class="truncate font-mono text-[10px] text-zinc-400">
+            {{ t("generate.logLines", { count: generationOutput.length }) }}
+          </span>
+          <div class="flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
+              @click="copyLogs"
+            >
+              <Copy class="h-3 w-3" />
+              {{ t("common.copy") }}
+            </button>
+            <button
+              type="button"
+              class="rounded-md px-2 py-1 text-[11px] font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
+              @click="clearOutput"
+            >
+              {{ t("common.clear") }}
+            </button>
+          </div>
+        </div>
+        <pre class="max-h-56 overflow-auto bg-zinc-950 px-4 py-3 font-mono text-[11px] leading-5">
+          <template v-for="output in generationOutput" :key="output.logId">
+            <span :class="output.stream === 'stderr' ? 'text-rose-300' : 'text-zinc-300'">{{
+              output.line
+            }}</span>{{ "\n" }}
+          </template>
+        </pre>
+      </div>
+
+      <!-- 结果（完成） -->
+      <div v-if="hasResult" class="border-t border-border px-5 py-4">
+        <!-- Pynguin / Python 3.12 兼容性问题警告 -->
+        <div
+          v-if="hasPynguinCompatIssue"
+          class="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3"
+        >
+          <div class="flex items-start gap-3">
+            <XCircle class="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+            <div class="min-w-0">
+              <div class="text-[13px] font-semibold text-rose-800">
+                {{ t("generate.pynguinCompatTitle") }}
+              </div>
+              <p class="mt-1 text-xs leading-5 text-rose-700">
+                {{ t("generate.pynguinCompatDesc") }}
+              </p>
+            </div>
+          </div>
+        </div>
+        <!-- 结论横幅 -->
+        <div
+          class="flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3.5"
           :class="
             resultConclusion.type === 'success'
               ? 'border-emerald-200 bg-emerald-50'
@@ -1212,20 +1275,17 @@ onUnmounted(() => {
                 : 'border-rose-200 bg-rose-50'
           "
         >
-          <div class="flex items-start gap-3">
+          <div class="flex min-w-0 items-start gap-3">
             <CheckCircle2
               v-if="resultConclusion.type === 'success'"
               class="mt-0.5 h-5 w-5 shrink-0 text-emerald-600"
             />
-
             <AlertCircle
               v-else-if="resultConclusion.type === 'warning'"
               class="mt-0.5 h-5 w-5 shrink-0 text-amber-600"
             />
-
             <XCircle v-else class="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
-
-            <div>
+            <div class="min-w-0">
               <div
                 class="text-sm font-semibold"
                 :class="
@@ -1238,9 +1298,8 @@ onUnmounted(() => {
               >
                 {{ resultConclusion.title }}
               </div>
-
               <div
-                class="mt-1 text-xs"
+                class="mt-0.5 text-xs"
                 :class="
                   resultConclusion.type === 'success'
                     ? 'text-emerald-700'
@@ -1253,143 +1312,79 @@ onUnmounted(() => {
               </div>
             </div>
           </div>
+          <span class="shrink-0 font-mono text-[11px] text-zinc-500">{{ lastRunSummary }}</span>
         </div>
 
-        <!-- File list -->
-        <div
-          v-if="generatedFiles.length > 0"
-          class="mt-5 divide-y divide-slate-100"
-        >
+        <!-- 生成文件列表 -->
+        <div v-if="generatedFiles.length > 0" class="mt-4 divide-y divide-border rounded-lg border border-border">
           <div
             v-for="file in generatedFiles"
             :key="file.path"
-            class="flex items-center gap-3 py-3"
+            class="flex flex-wrap items-center gap-3 px-4 py-2.5"
           >
             <component
               :is="getGeneratedFileIcon(file.status)"
               class="h-4 w-4 shrink-0"
               :class="getGeneratedFileClass(file.status)"
             />
-
-            <FileCode2 class="h-4 w-4 shrink-0 text-slate-400" />
-
             <div class="min-w-0 flex-1">
-              <div class="truncate text-sm font-medium text-slate-800">
-                {{ file.name }}
-              </div>
-
-              <div class="mt-0.5 truncate font-mono text-[11px] text-slate-500">
+              <div class="truncate text-[13px] font-medium text-zinc-800">{{ file.name }}</div>
+              <div class="mt-0.5 truncate font-mono text-[10px] text-zinc-500">
                 {{ file.relativePath }}
-                <template v-if="file.testCaseCount > 0">
-                  · {{ t("generate.results.testCases", { count: file.testCaseCount }) }}
-                </template>
               </div>
             </div>
-
-            <div class="flex items-center gap-1">
+            <span class="shrink-0 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-medium" :class="getGeneratedFileClass(file.status)">
+              {{ fileStatusLabel(file.status) }}
+            </span>
+            <span class="shrink-0 font-mono text-[11px] text-zinc-500">
+              {{ t("generate.results.testCases", { count: file.testCaseCount }) }}
+            </span>
+            <div class="flex shrink-0 items-center gap-1">
               <button
                 type="button"
-                class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                class="rounded-lg p-1.5 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
                 :title="t('generate.actions.openFile')"
                 @click="openFile(file.path)"
               >
-                <ExternalLink class="h-3.5 w-3.5" />
+                <FolderOpen class="h-3.5 w-3.5" />
               </button>
-
               <button
                 type="button"
-                class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                class="rounded-lg p-1.5 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
                 :title="t('generate.actions.revealInFolder')"
                 @click="revealFile(file.path)"
               >
                 <Folder class="h-3.5 w-3.5" />
               </button>
-
               <button
                 type="button"
-                class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                class="rounded-lg p-1.5 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
                 :title="t('generate.actions.copyPath')"
                 @click="copyPath(file.path)"
               >
-                <ClipboardCopy class="h-3.5 w-3.5" />
+                <Copy class="h-3.5 w-3.5" />
               </button>
             </div>
           </div>
         </div>
-
-        <div v-else class="py-8 text-center text-xs text-slate-500">
-          {{ t("generate.results.empty") }}
-        </div>
       </div>
     </section>
 
-    <!-- Generation Log -->
-    <section
-      v-if="generationOutput.length > 0"
-      class="rounded-2xl border border-slate-200 bg-white"
+    <!-- UTF-8 BOM 确认弹窗：无损移除后继续生成 -->
+    <AppConfirmModal
+      :open="showBomModal"
+      :title="t('generate.bomTitle')"
+      :description="t('generate.bomDesc', { count: bomFiles.length })"
+      variant="primary"
+      :confirm-label="t('generate.bomFix')"
+      @confirm="confirmFixBom"
+      @update:open="(open: boolean) => { if (!open) showBomModal = false }"
     >
-      <button
-        type="button"
-        class="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
-        @click="showGenerationLog = !showGenerationLog"
+      <ul
+        class="max-h-40 overflow-auto rounded-lg bg-zinc-50 p-3 font-mono text-[11px] leading-5 text-zinc-600"
       >
-        <div class="flex min-w-0 items-center gap-3">
-          <div
-            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100"
-          >
-            <Code2 class="h-4 w-4 text-slate-500" />
-          </div>
-
-          <div class="min-w-0">
-            <div class="text-sm font-medium text-slate-800">
-              {{ t("generate.progress.logTitle") }}
-            </div>
-
-            <div class="mt-1 text-xs text-slate-500">
-              {{ t("generate.logLines", { count: generationOutput.length }) }}
-            </div>
-          </div>
-        </div>
-
-        <ChevronDown
-          class="h-4 w-4 shrink-0 text-slate-400 transition-transform"
-          :class="{ 'rotate-180': showGenerationLog }"
-        />
-      </button>
-
-      <div v-if="showGenerationLog" class="border-t border-slate-200">
-        <div
-          class="flex items-center justify-end gap-2 border-b border-slate-800 bg-slate-950 px-4 py-2"
-        >
-          <button
-            type="button"
-            class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-slate-300 transition hover:bg-slate-800 hover:text-white"
-            @click="copyLogs"
-          >
-            <Copy class="h-3 w-3" />
-            {{ t("common.copy") }}
-          </button>
-
-          <button
-            type="button"
-            class="rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-slate-300 transition hover:bg-slate-800 hover:text-white"
-            @click="clearOutput"
-          >
-            {{ t("common.clear") }}
-          </button>
-        </div>
-
-        <div class="bg-slate-950 p-4">
-          <pre
-            class="max-h-125 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-xs leading-5"
-          ><span
-              v-for="output in generationOutput"
-              :key="output.logId"
-              :class="output.stream === 'stderr' ? 'text-rose-300' : 'text-slate-300'"
-            >{{ output.line }}
-          {{ "\n" }}</span></pre>
-        </div>
-      </div>
-    </section>
+        <li v-for="f in bomFiles" :key="f">{{ f }}</li>
+      </ul>
+    </AppConfirmModal>
   </div>
 </template>

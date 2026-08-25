@@ -25,6 +25,9 @@ pub fn scan_test_files(project_path: String) -> Result<Vec<TestFile>, String> {
         return Err(format!("Project path is not a directory: {}", project_path));
     }
 
+    // 自愈：生成测试目录补 __init__.py，避免 pytest 同名模块冲突
+    super::ensure_generated_test_packages(&project);
+
     let tests_dir = project.join("tests");
 
     if !tests_dir.exists() {
@@ -102,6 +105,9 @@ pub fn collect_test_cases(project_path: String) -> Result<Vec<TestCase>, String>
             project_path
         ));
     }
+
+    // 自愈：生成测试目录补 __init__.py，避免 pytest 同名模块冲突
+    super::ensure_generated_test_packages(&project);
 
     let python = find_project_python(&project)?;
 
@@ -564,6 +570,32 @@ pub fn parse_junit_results_from_str(content: &str) -> Result<Vec<TestResult>, St
             {
                 if let Some(test) = current.as_mut() {
                     test.status = "skipped".to_string();
+                }
+            }
+
+            // ---- 自闭合空元素：pytest 的 JUnit 输出中 <skipped/> 通常不带文本 ----
+            // 此前只处理 Event::Start，导致自闭合 <skipped/> 被漏判为 "passed"（由回归测试捕获）
+            Ok(quick_xml::events::Event::Empty(ref event))
+                if event.name().as_ref() == b"skipped" =>
+            {
+                if let Some(test) = current.as_mut() {
+                    test.status = "skipped".to_string();
+                }
+            }
+
+            Ok(quick_xml::events::Event::Empty(ref event))
+                if event.name().as_ref() == b"failure" =>
+            {
+                if let Some(test) = current.as_mut() {
+                    test.status = "failed".to_string();
+                }
+            }
+
+            Ok(quick_xml::events::Event::Empty(ref event))
+                if event.name().as_ref() == b"error" =>
+            {
+                if let Some(test) = current.as_mut() {
+                    test.status = "error".to_string();
                 }
             }
 

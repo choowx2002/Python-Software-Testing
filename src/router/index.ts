@@ -25,10 +25,21 @@ const router = createRouter({
       children: [
         {
           path: "",
+          name: "ProjectContextHome",
           redirect: (to) => ({
-            name: "ProjectExecute",
+            name: "ProjectOverview",
             params: { id: to.params.id },
           }),
+        },
+        {
+          path: "overview",
+          name: "ProjectOverview",
+          component: () => import("@/views/projects/[id]/Overview.vue"),
+        },
+        {
+          path: "history",
+          name: "ProjectHistory",
+          component: () => import("@/views/projects/[id]/History.vue"),
         },
         {
           path: "execute",

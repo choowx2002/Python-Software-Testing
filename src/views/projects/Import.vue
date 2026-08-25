@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useI18n } from 'vue-i18n'
+import EnvFixWizard from '../../components/EnvFixWizard.vue'
 import {
   FolderPlus, FolderOpen, Check, X, AlertCircle,
   ArrowLeft, Loader2, Sparkles, Terminal, Package
@@ -24,10 +25,10 @@ const projectName = ref('')
 const error = ref<string | null>(null)
 
 interface EnvResult {
-  python_path: string | null
-  python_version: string | null
-  venv_path: string | null
-  venv_exists: boolean
+  pythonPath: string | null
+  pythonVersion: string | null
+  venvPath: string | null
+  venvExists: boolean
   dependencies: {
     name: string
     installed: boolean
@@ -40,12 +41,14 @@ const envResult = ref<EnvResult | null>(null)
 
 // 🆕 记录每个包的实时状态
 const stepStatus = ref<Record<string, 'starting' | 'success' | 'failed'>>({})
+// 🆕 安装失败时的 pip 真实报错（stderr 摘要）
+const installErrorReason = ref('')
 
 // ============================================
 // Computed
 // ============================================
 const missingDeps = computed(() => {
-  if (!envResult.value?.venv_exists) return []
+  if (!envResult.value?.venvExists) return []
   return envResult.value.dependencies
     .filter(d => !d.installed)
     .map(d => d.name)
@@ -54,18 +57,30 @@ const missingDeps = computed(() => {
 const isEnvReady = computed(() => {
   const env = envResult.value
   if (!env) return false
-  if (!env.venv_exists) return false
+  if (!env.venvExists) return false
   return missingDeps.value.length === 0
 })
 
 const envStatus = computed<'Ready' | 'Warning' | 'Failed' | 'Action Required'>(() => {
   const env = envResult.value
   if (!env) return 'Failed'
-  if (!env.python_path) return 'Failed'
-  if (!env.venv_exists) return 'Action Required'
+  if (!env.pythonPath) return 'Failed'
+  if (!env.venvExists) return 'Action Required'
   if (missingDeps.value.length > 0) return 'Warning'
   return 'Ready'
 })
+
+/** Python 3.12+ → Pynguin 生成测试有已知兼容性问题，提醒用户一键换 3.11 */
+const pyVersionRisk = computed(() => {
+  const v = envResult.value?.pythonVersion ?? ''
+  const m = v.match(/3\.(\d+)/)
+  return !!m && Number(m[1]) >= 12
+})
+
+/** 一键修复完成后重新检测环境 */
+async function onEnvFixed() {
+  await detectEnvironment()
+}
 
 // ============================================
 // Actions
@@ -103,13 +118,13 @@ async function detectEnvironment() {
 }
 
 async function createVirtualEnv() {
-  if (!envResult.value?.python_path) return
+  if (!envResult.value?.pythonPath) return
   phase.value = 'detecting'
   error.value = null
   try {
     await invoke<string>('create_virtual_env', {
       projectPath: projectPath.value,
-      pythonExecutable: envResult.value.python_path
+      pythonExecutable: envResult.value.pythonPath
     })
     await detectEnvironment()
   } catch (err) {
@@ -119,10 +134,11 @@ async function createVirtualEnv() {
 }
 
 async function installMissingDeps() {
-  if (!envResult.value?.python_path || missingDeps.value.length === 0) return
+  if (!envResult.value?.pythonPath || missingDeps.value.length === 0) return
 
   phase.value = 'installing'
   error.value = null
+  installErrorReason.value = ''
   stepStatus.value = {} // 重置状态
 
   // 监听单步状态事件 (不再需要更新 logs)
@@ -136,16 +152,18 @@ async function installMissingDeps() {
       success: boolean
       installed: string[]
       failed: string[]
+      failedReasons?: string[]
     }>('install_dependencies', {
-      pythonPath: envResult.value.python_path,
+      pythonPath: envResult.value.pythonPath,
       packages: missingDeps.value,
     })
 
     if (result.success) {
       await detectEnvironment() // 刷新状态
     } else {
-      // 如果有失败的，直接通过 error 提示，不再用大段 log
+      // 显示失败包 + pip 的真实报错（stderr 摘要），不再只给笼统的提示
       error.value = t('import.reviewStep.installFailed', { packages: result.failed.join(', ') })
+      installErrorReason.value = result.failedReasons?.[0] ?? ''
     }
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
@@ -163,7 +181,7 @@ async function saveProject() {
     await invoke("add_project", {
       name: projectName.value,
       projectPath: projectPath.value,
-      interpreterPath: envResult.value.python_path,
+      interpreterPath: envResult.value.pythonPath,
     })
     phase.value = 'done'
     setTimeout(() => router.push("/"), 800)
@@ -227,7 +245,7 @@ function isPhase(p: Phase): boolean {
             <p class="text-xs text-slate-500">{{ t('import.selectStep.description') }}</p>
           </div>
           <button @click="selectFolder"
-            class="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium rounded-md transition-colors active:scale-[0.99] flex items-center justify-center gap-2">
+            class="btn btn-primary btn-md w-full">
             <FolderOpen class="w-4 h-4" /> {{ t('import.selectStep.pickFolder') }}
           </button>
           <div v-if="error" class="mt-4 p-3 bg-rose-50 border border-rose-200 rounded-md flex items-start gap-2">
@@ -272,7 +290,7 @@ function isPhase(p: Phase): boolean {
               ]">
                 <span :class="[
                   'w-1.5 h-1.5 rounded-full',
-                  envStatus === 'Ready' ? 'bg-emerald-500' : envStatus === 'Warning' ? 'bg-amber-500' : envStatus === 'Action Required' ? 'bg-blue-500' : 'bg-rose-500'
+                  envStatus === 'Ready' ? 'bg-emerald-500' : envStatus === 'Warning' ? 'bg-amber-500' : envStatus === 'Action Required' ? 'bg-sky-500' : 'bg-rose-500'
                 ]"></span>
                 {{ envStatus === 'Action Required' ? t('import.reviewStep.actionRequired') : envStatus }}
               </span>
@@ -281,7 +299,7 @@ function isPhase(p: Phase): boolean {
               <div>
                 <label class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{{ t('import.reviewStep.projectName') }}</label>
                 <input v-model="projectName" type="text"
-                  class="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-zinc-200/80 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/40" />
+                  class="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-zinc-200/80 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/15 focus:border-brand-500" />
               </div>
               <div>
                 <label class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{{ t('import.reviewStep.projectPath') }}</label>
@@ -295,6 +313,18 @@ function isPhase(p: Phase): boolean {
           <!-- Environment Details -->
           <div class="p-5 border-b border-zinc-200/80">
             <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-3">{{ t('import.reviewStep.envTitle') }}</p>
+
+            <!-- Python 3.12 + Pynguin 兼容性提醒 + 一键换 3.11 -->
+            <div v-if="pyVersionRisk" class="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-md">
+              <div class="flex items-start gap-2">
+                <AlertCircle class="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                <p class="text-xs leading-5 text-amber-700">{{ t('generate.py312Warning') }}</p>
+              </div>
+              <div class="mt-2">
+                <EnvFixWizard :project-path="projectPath" @fixed="onEnvFixed" />
+              </div>
+            </div>
+
             <div class="space-y-2">
               <!-- Python -->
               <div class="flex items-center justify-between px-3 py-2 bg-slate-50 rounded-md">
@@ -302,10 +332,10 @@ function isPhase(p: Phase): boolean {
                   <Terminal class="w-3.5 h-3.5 text-slate-500" />
                   <span class="text-xs text-slate-700">{{ t('import.reviewStep.pythonInterpreter') }}</span>
                 </div>
-                <div v-if="envResult?.python_path && envResult.python_version" class="flex items-center gap-2">
+                <div v-if="envResult?.pythonPath && envResult.pythonVersion" class="flex items-center gap-2">
                   <span class="text-xs font-mono text-slate-600">
-                    {{ envResult.python_version }}
-                    <span v-if="!envResult.venv_exists" class="text-[10px] text-slate-400 ml-1">{{ t('import.reviewStep.global') }}</span>
+                    {{ envResult.pythonVersion }}
+                    <span v-if="!envResult.venvExists" class="text-[10px] text-slate-400 ml-1">{{ t('import.reviewStep.global') }}</span>
                   </span>
                   <Check class="w-3.5 h-3.5 text-emerald-500" />
                 </div>
@@ -321,14 +351,14 @@ function isPhase(p: Phase): boolean {
                   <Package class="w-3.5 h-3.5 text-slate-500" />
                   <span class="text-xs text-slate-700">{{ t('import.reviewStep.virtualEnv') }}</span>
                 </div>
-                <div v-if="envResult?.venv_exists" class="flex items-center gap-2">
-                  <span class="text-xs font-mono text-slate-600 truncate max-w-[220px]">{{ envResult.venv_path }}</span>
+                <div v-if="envResult?.venvExists" class="flex items-center gap-2">
+                  <span class="text-xs font-mono text-slate-600 truncate max-w-[220px]">{{ envResult.venvPath }}</span>
                   <Check class="w-3.5 h-3.5 text-emerald-500" />
                 </div>
-                <div v-else-if="envResult?.python_path" class="flex items-center gap-2">
+                <div v-else-if="envResult?.pythonPath" class="flex items-center gap-2">
                   <span class="text-xs text-blue-600">{{ t('import.reviewStep.readyToCreate') }}</span>
                   <button @click="createVirtualEnv" :disabled="isPhase('detecting')"
-                    class="flex items-center gap-1 px-2 py-0.5 bg-blue-500 hover:bg-blue-600 text-white text-[10px] font-medium rounded transition-colors disabled:opacity-50">
+                    class="btn btn-primary btn-sm">
                     <Loader2 v-if="isPhase('detecting')" class="w-3 h-3 animate-spin" />
                     <span v-else>{{ t('import.reviewStep.createVenv') }}</span>
                   </button>
@@ -340,7 +370,7 @@ function isPhase(p: Phase): boolean {
               </div>
 
               <!-- Dependencies (Cleaned up UI) -->
-              <div v-if="envResult?.venv_exists">
+              <div v-if="envResult?.venvExists">
                 <div v-for="dep in envResult?.dependencies" :key="dep.name"
                   class="flex items-center justify-between px-3 py-2 bg-slate-50 rounded-md transition-colors">
                   <div class="flex items-center gap-2">
@@ -366,7 +396,7 @@ function isPhase(p: Phase): boolean {
                 </div>
               </div>
 
-              <div v-else-if="envResult?.python_path" class="px-3 py-3 bg-blue-50 rounded-md border border-blue-100">
+              <div v-else-if="envResult?.pythonPath" class="px-3 py-3 bg-blue-50 rounded-md border border-blue-100">
                 <p class="text-xs text-blue-700 flex items-start gap-2">
                   <AlertCircle class="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
                   {{ t('import.reviewStep.venvRequired') }}
@@ -399,7 +429,7 @@ function isPhase(p: Phase): boolean {
               </button>
 
               <button @click="saveProject" :disabled="!isEnvReady || isPhase('installing') || isPhase('saving')"
-                class="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-xs font-medium rounded-md transition-colors active:scale-[0.98] flex items-center gap-1.5">
+                class="btn btn-primary btn-sm">
                 <Loader2 v-if="isPhase('saving')" class="w-3.5 h-3.5 animate-spin" />
                 <Check v-else class="w-3.5 h-3.5" />
                 {{ isPhase('saving') ? t('common.saving') : t('import.reviewStep.importProject') }}
@@ -412,6 +442,14 @@ function isPhase(p: Phase): boolean {
             <div class="p-3 bg-rose-50 border border-rose-200 rounded-md flex items-start gap-2">
               <X class="w-4 h-4 text-rose-500 flex-shrink-0 mt-0.5" />
               <p class="text-xs text-rose-700">{{ error }}</p>
+            </div>
+            <!-- 安装失败：显示 pip 真实报错（stderr 摘要）与排查提示 -->
+            <div v-if="installErrorReason" class="mt-2">
+              <pre
+                class="max-h-40 overflow-auto rounded-md bg-zinc-950 px-3 py-2 font-mono text-[10px] leading-4 whitespace-pre-wrap text-rose-300">{{ installErrorReason }}</pre>
+              <p class="mt-1.5 text-[11px] text-zinc-500">
+                {{ t('import.reviewStep.installFailedHint') }}
+              </p>
             </div>
           </div>
         </div>

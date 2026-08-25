@@ -1,36 +1,49 @@
 <script setup lang="ts">
-import { onMounted, computed, ref, watch } from "vue";
+/**
+ * Dashboard —— 首页
+ * 重构要点（第一批）：
+ *  - 侧边栏统一为 AppSidebar（导航/版本/语言）
+ *  - 主色统一为 brand 蓝，删除克隆弹窗的蓝色孤岛
+ *  - 新手三步引导（导入 → 生成 → 运行测量）替代裸空状态
+ *  - 删除无功能的 Filter 按钮；Sort 改为真实可用的排序
+ *  - 删除项目增加悬停可见的删除按钮（新手不需要知道右键菜单）
+ */
+import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "vue-i18n";
-import { useProjectStore } from "../stores/projectStore";
-import { setLocale } from "../i18n";
+import { useProjectStore, type Project } from "../stores/projectStore";
 import {
-  FolderPlus,
-  GitBranch,
-  Sparkles,
+  ArrowDown,
+  ArrowUp,
   BookOpen,
   Bug,
-  Search,
-  SlidersHorizontal,
-  ArrowUpDown,
   Code2,
   Database,
-  X,
+  FolderPlus,
+  GitBranch,
+  Loader2,
+  Search,
+  Sparkles,
   Terminal,
+  Trash2,
 } from "@lucide/vue";
-import { ask, open } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
+import AppSidebar from "../components/AppSidebar.vue";
+import AppNavItem from "../components/ui/AppNavItem.vue";
+import AppButton from "../components/ui/AppButton.vue";
+import AppEmptyState from "../components/ui/AppEmptyState.vue";
+import StatusPill from "../components/ui/StatusPill.vue";
+import AppModal from "../components/ui/AppModal.vue";
+import AppConfirmModal from "../components/ui/AppConfirmModal.vue";
 
 const router = useRouter();
 const projectStore = useProjectStore();
-const { t, locale } = useI18n();
-const currentLocale = computed(() => locale.value);
+const { t } = useI18n();
 
-function switchLocale(lang: "en" | "zh") {
-  setLocale(lang);
-}
-
-// Clone Repository 状态
+/* ------------------------------------------------------------------ */
+/* Clone Repository 状态（原逻辑保持不变）                              */
+/* ------------------------------------------------------------------ */
 const showCloneModal = ref(false);
 const cloneUrl = ref("");
 const cloneTargetDir = ref("");
@@ -71,15 +84,14 @@ async function cloneRepository() {
     // 克隆后自动探测 Python 环境并写入解释器路径
     let interpreterPath: string | null = null;
     try {
-      const env = await invoke<{
-        pythonPath: string | null;
-      }>("detect_python_env", { projectPath: clonedPath });
+      const env = await invoke<{ pythonPath: string | null }>("detect_python_env", {
+        projectPath: clonedPath,
+      });
       interpreterPath = env.pythonPath;
     } catch (error) {
       console.error("[Dashboard] detect_python_env failed after clone:", error);
     }
 
-    // NFR008：写入 projects 表走 Rust 类型化命令（含重复路径拦截）
     try {
       await invoke("add_project", {
         name: repoName,
@@ -87,8 +99,7 @@ async function cloneRepository() {
         interpreterPath: interpreterPath,
       });
     } catch (error) {
-      cloneError.value =
-        error instanceof Error ? error.message : String(error);
+      cloneError.value = error instanceof Error ? error.message : String(error);
       isCloning.value = false;
       return;
     }
@@ -103,74 +114,53 @@ async function cloneRepository() {
   }
 }
 
-// 搜索关键词
+/* ------------------------------------------------------------------ */
+/* 搜索 + 排序                                                         */
+/* ------------------------------------------------------------------ */
 const searchQuery = ref("");
+/** true = 最近打开在前（默认），false = 最久在前 */
+const sortDesc = ref(true);
 
-const filteredProjects = computed(() => {
-  // 确保 projects 始终是一个数组，防止 undefined 报错
+const visibleProjects = computed(() => {
   const projects = projectStore.projects || [];
+  const query = searchQuery.value.trim().toLowerCase();
 
-  if (!searchQuery.value) return projects;
+  const filtered = query
+    ? projects.filter(
+        (p) =>
+          p.name?.toLowerCase().includes(query) ||
+          p.path?.toLowerCase().includes(query),
+      )
+    : projects;
 
-  const query = searchQuery.value.toLowerCase();
-  return projects.filter(
-    (p) =>
-      // 使用 ?. 防止 name 或 path 为 null/undefined 时 toLowerCase 报错
-      p.name?.toLowerCase().includes(query) ||
-      p.path?.toLowerCase().includes(query)
-  );
+  // 按 last_run 排序（从未运行的项目排最后）
+  return [...filtered].sort((a, b) => {
+    const ta = a.last_run ? new Date(a.last_run).getTime() : 0;
+    const tb = b.last_run ? new Date(b.last_run).getTime() : 0;
+    return sortDesc.value ? tb - ta : ta - tb;
+  });
 });
 
-// 状态颜色映射
-const getStatusColor = (status: string) => {
-  switch (status) {
-    case "Ready":
-      return "bg-emerald-500";
-    case "Warning":
-      return "bg-amber-500";
-    case "Failed":
-      return "bg-rose-500";
-    default:
-      return "bg-slate-400";
-  }
-};
+const sortIcon = computed(() => (sortDesc.value ? ArrowDown : ArrowUp));
 
-const getStatusTextColor = (status: string) => {
-  switch (status) {
-    case "Ready":
-      return "text-emerald-600";
-    case "Warning":
-      return "text-amber-600";
-    case "Failed":
-      return "text-rose-600";
-    default:
-      return "text-slate-600";
-  }
-};
+/* ------------------------------------------------------------------ */
+/* 新手三步引导（对应真实工作流：导入 → 生成 → 执行）                    */
+/* ------------------------------------------------------------------ */
+const welcomeSteps = computed(() => [
+  { title: t("dashboard.welcome.step1Title"), desc: t("dashboard.welcome.step1Desc") },
+  { title: t("dashboard.welcome.step2Title"), desc: t("dashboard.welcome.step2Desc") },
+  { title: t("dashboard.welcome.step3Title"), desc: t("dashboard.welcome.step3Desc") },
+]);
 
-// 页面挂载时拉取数据
-onMounted(async () => {
-  await projectStore.fetchProjects();
-  await refreshPythonVersion();
-});
-
-// 项目列表变化（导入/删除/刷新）后重新探测 Python 环境
-watch(
-  () => projectStore.projects,
-  () => {
-    void refreshPythonVersion();
-  },
-);
-
-// 状态栏 Python 版本：调用 detect_python_env 获取真实版本
-// 取第一个带 interpreter_path 的项目（否则取第一个项目）作为代表环境
+/* ------------------------------------------------------------------ */
+/* 状态栏：Python 环境探测（原逻辑保持不变）                            */
+/* ------------------------------------------------------------------ */
 const pythonVersion = ref<string | null>(null);
 const pythonVenv = ref<boolean | null>(null);
 
 async function refreshPythonVersion() {
   const candidate =
-    projectStore.projects.find((p) => p.interpreter_path) ??
-    projectStore.projects[0];
+    projectStore.projects.find((p) => p.interpreter_path) ?? projectStore.projects[0];
 
   if (!candidate?.path) {
     pythonVersion.value = null;
@@ -200,293 +190,265 @@ async function refreshPythonVersion() {
   }
 }
 
-// 路由跳转
+onMounted(async () => {
+  await projectStore.fetchProjects();
+  await refreshPythonVersion();
+});
+
+watch(
+  () => projectStore.projects,
+  () => void refreshPythonVersion(),
+);
+
+/* ------------------------------------------------------------------ */
+/* 导航与删除                                                          */
+/* ------------------------------------------------------------------ */
 const goToImport = () => router.push("/projects/import");
 const goToProject = (id: number) => router.push(`/projects/${id}`);
 
-const handleDelete = async (projectId: number, projectName: string) => {
-  const deleteConfirm = await ask(t("dashboard.deleteConfirm", { name: projectName }))
-  if (!deleteConfirm) {
-    return
-  }
+/** 待删除项目（确认弹窗） */
+const deleteTarget = ref<Project | null>(null);
+
+function handleDelete(project: Project) {
+  deleteTarget.value = project;
+}
+
+async function confirmDeleteProject() {
+  const target = deleteTarget.value;
+  if (!target) return;
 
   try {
-    await projectStore.deleteProject(projectId)
-    console.log(t("dashboard.deleteSuccess"))
+    await projectStore.deleteProject(target.id);
+    console.log(t("dashboard.deleteSuccess"));
   } catch (error) {
-    console.error(t("dashboard.deleteFailed"), error)
+    console.error(t("dashboard.deleteFailed"), error);
+  } finally {
+    deleteTarget.value = null;
   }
 }
+
+/** 覆盖率进度条颜色：>=80% 绿，否则琥珀（沿用原阈值） */
+const coverageTone = (coverage: number) =>
+  coverage >= 80 ? "bg-emerald-500" : "bg-amber-500";
 </script>
 
 <template>
-  <div class="flex h-screen w-screen overflow-hidden bg-slate-50 text-slate-900">
-    <!-- LEFT PANE: Actions & Navigation -->
-    <aside class="w-64 bg-white border-r border-zinc-200/80 flex flex-col">
-      <div class="px-6 pt-8 pb-6">
+  <div class="flex h-screen w-screen overflow-hidden bg-surface text-zinc-900">
+    <!-- 统一侧边栏 -->
+    <AppSidebar>
+      <p class="section-label mb-1.5">{{ t("dashboard.quickActions") }}</p>
+      <div class="space-y-0.5">
+        <AppNavItem
+          :icon="FolderPlus"
+          :label="t('dashboard.importProject')"
+          :description="t('dashboard.importProjectDesc')"
+          @click="goToImport"
+        />
+        <AppNavItem
+          :icon="GitBranch"
+          :label="t('dashboard.cloneRepository')"
+          :description="t('dashboard.cloneRepositoryDesc')"
+          @click="openCloneModal"
+        />
+        <AppNavItem
+          :icon="Sparkles"
+          :label="t('dashboard.aiTestGenerator')"
+          description="Pynguin"
+          disabled
+          :title="t('dashboard.comingSoon')"
+        />
+      </div>
+
+      <p class="section-label mb-1.5 mt-5">Resources</p>
+      <div class="space-y-0.5">
+        <AppNavItem :icon="BookOpen" label="Documentation" disabled :title="t('dashboard.comingSoon')" />
+        <AppNavItem :icon="Bug" label="Report Issue" disabled :title="t('dashboard.comingSoon')" />
+      </div>
+
+      <p class="section-label mb-1.5 mt-5">Debug</p>
+      <div class="space-y-0.5">
+        <AppNavItem :icon="Database" label="View DB Schema" @click="router.push('/debug/schema')" />
+      </div>
+    </AppSidebar>
+
+    <!-- 主区域 -->
+    <main class="flex min-w-0 flex-1 flex-col">
+      <!-- 工具栏 -->
+      <header class="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border bg-white px-5">
         <div class="flex items-center gap-2.5">
-          <div
-            class="w-8 h-8 bg-linear-to-br from-emerald-500 to-emerald-600 rounded-md flex items-center justify-center shadow-sm">
-            <img src="/src/assets/app-icon-sm.png" />
-          </div>
-          <div>
-            <h1 class="text-sm font-semibold text-slate-800">Testmate</h1>
-            <p class="text-[10px] text-slate-500">Testing & Coverage Suite</p>
-          </div>
-        </div>
-      </div>
-
-      <div class="px-4 flex-1">
-        <p class="px-2 text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2">
-          {{ t("dashboard.quickActions") }}
-        </p>
-        <div class="space-y-0.5">
-          <button @click="goToImport"
-            class="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left group active:scale-[0.99]">
-            <div
-              class="w-7 h-7 bg-emerald-50 rounded-md flex items-center justify-center group-hover:bg-emerald-100 transition-colors">
-              <FolderPlus class="w-3.5 h-3.5 text-emerald-500" />
-            </div>
-            <div>
-              <p class="text-[13px] font-medium text-slate-800">
-                {{ t("dashboard.importProject") }}
-              </p>
-              <p class="text-[10px] text-slate-500">{{ t("dashboard.importProjectDesc") }}</p>
-            </div>
-          </button>
-
-          <button @click="openCloneModal"
-            class="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left group active:scale-[0.99]">
-            <div
-              class="w-7 h-7 bg-blue-50 rounded-md flex items-center justify-center group-hover:bg-blue-100 transition-colors">
-              <GitBranch class="w-3.5 h-3.5 text-blue-500" />
-            </div>
-            <div>
-              <p class="text-[13px] font-medium text-slate-800">
-                {{ t("dashboard.cloneRepository") }}
-              </p>
-              <p class="text-[10px] text-slate-500">{{ t("dashboard.cloneRepositoryDesc") }}</p>
-            </div>
-          </button>
-
-          <button
-            class="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left group active:scale-[0.99]">
-            <div
-              class="w-7 h-7 bg-indigo-50 rounded-md flex items-center justify-center group-hover:bg-indigo-100 transition-colors">
-              <Sparkles class="w-3.5 h-3.5 text-indigo-500" />
-            </div>
-            <div>
-              <p class="text-[13px] font-medium text-slate-800">
-                {{ t("dashboard.aiTestGenerator") }}
-              </p>
-              <p class="text-[10px] text-slate-500">Powered by Pynguin</p>
-            </div>
-          </button>
-        </div>
-
-        <p class="px-2 text-[10px] font-semibold text-slate-400 uppercase tracking-wider mt-6 mb-2">
-          Resources
-        </p>
-        <div class="space-y-0.5">
-          <a href="#" class="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left">
-            <BookOpen class="w-3.5 h-3.5 text-slate-400" />
-            <span class="text-[13px] text-slate-600">Documentation</span>
-          </a>
-          <a href="#" class="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left">
-            <Bug class="w-3.5 h-3.5 text-slate-400" />
-            <span class="text-[13px] text-slate-600">Report Issue</span>
-          </a>
-        </div>
-      </div>
-      <div class="px-4 mt-4 border-t border-zinc-200/80 pt-4">
-        <p class="px-2 text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2">
-          Debug
-        </p>
-        <button @click="$router.push('/debug/schema')"
-          class="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-slate-50 transition-all text-left">
-          <Database class="w-3.5 h-3.5 text-slate-400" />
-          <span class="text-[13px] text-slate-600">View DB Schema</span>
-        </button>
-      </div>
-
-      <div class="px-6 py-4 border-t border-zinc-200/80 flex items-center justify-between gap-2">
-        <p class="text-[10px] text-slate-400 font-mono">
-          v1.2.0 · Build 2024.3
-        </p>
-        <div class="flex items-center gap-1 rounded-md border border-zinc-200 p-0.5">
-          <button
-            v-for="lang in ['en', 'zh'] as const"
-            :key="lang"
-            type="button"
-            class="px-1.5 py-0.5 text-[10px] font-medium rounded transition"
-            :class="currentLocale === lang ? 'bg-emerald-500 text-white' : 'text-slate-500 hover:bg-slate-100'"
-            @click="switchLocale(lang)"
-          >
-            {{ lang === "en" ? "EN" : "中文" }}
-          </button>
-        </div>
-      </div>
-    </aside>
-
-    <!-- RIGHT PANE: Project Management -->
-    <main class="flex-1 flex flex-col overflow-hidden bg-slate-50">
-      <!-- Toolbar -->
-      <div class="h-14 px-6 flex items-center justify-between border-b border-zinc-200/80 bg-white">
-        <div class="flex items-center gap-3">
-          <h2 class="text-sm font-semibold text-slate-800">{{ t("dashboard.projectsTitle") }}</h2>
-          <span class="px-1.5 py-0.5 bg-slate-100 text-slate-500 text-[10px] font-mono rounded">
-            {{ projectStore.projects.length }}
+          <h1 class="text-sm font-semibold text-zinc-900">{{ t("dashboard.projectsTitle") }}</h1>
+          <span class="rounded-md bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500">
+            {{ visibleProjects.length }}
           </span>
         </div>
+
         <div class="flex items-center gap-2">
           <div class="relative">
-            <Search class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-            <input v-model="searchQuery" type="text" :placeholder="t('dashboard.searchPlaceholder')"
-              class="pl-8 pr-3 py-1.5 bg-slate-50 border border-zinc-200/80 rounded-md text-xs w-56 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/40 transition-all" />
+            <Search class="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
+            <input
+              v-model="searchQuery"
+              type="text"
+              :placeholder="t('dashboard.searchPlaceholder')"
+              class="input h-8 pl-8 pr-3"
+              aria-label="Search projects"
+            />
           </div>
-          <button
-            class="flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-zinc-200/80 rounded-md text-xs text-slate-600 hover:bg-slate-50 transition-all active:scale-[0.98]">
-            <SlidersHorizontal class="w-3.5 h-3.5" />
-            <span>{{ t("dashboard.filter") }}</span>
-          </button>
-          <button
-            class="flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-zinc-200/80 rounded-md text-xs text-slate-600 hover:bg-slate-50 transition-all active:scale-[0.98]">
-            <ArrowUpDown class="w-3.5 h-3.5" />
-            <span>{{ t("dashboard.sortLastOpened") }}</span>
-          </button>
+          <AppButton
+            variant="secondary"
+            size="sm"
+            :title="sortDesc ? 'Newest first' : 'Oldest first'"
+            @click="sortDesc = !sortDesc"
+          >
+            <component :is="sortIcon" class="h-3.5 w-3.5" />
+            {{ t("dashboard.sortLastOpened") }}
+          </AppButton>
         </div>
-      </div>
+      </header>
 
-      <!-- Content Area -->
-      <div class="flex-1 overflow-auto">
-        <!-- Empty State (当没有项目或搜索无结果时) -->
-        <div v-if="projectStore.isLoading" class="flex flex-col items-center justify-center h-full text-slate-400">
-          <div class="w-8 h-8 border-2 border-slate-200 border-t-emerald-500 rounded-full animate-spin mb-3"></div>
-          <p class="text-sm">{{ t("dashboard.loadingProjects") }}</p>
-        </div>
-
-        <div v-else-if="filteredProjects.length === 0"
-          class="flex flex-col items-center justify-center h-full text-slate-400">
-          <FolderPlus class="w-12 h-12 mb-3 text-slate-300" />
-          <p class="text-sm font-medium text-slate-600 mb-1">
-            {{
-              searchQuery
-                ? t("dashboard.emptyState.searchNoMatch")
-                : t("dashboard.emptyState.title")
-            }}
-          </p>
-          <p class="text-xs mb-4">
-            {{ t("dashboard.emptyState.description") }}
-          </p>
-          <button @click="goToImport"
-            class="px-4 py-2 bg-emerald-500 text-white text-xs font-medium rounded-md hover:bg-emerald-600 transition-colors active:scale-[0.98]">
-            {{ t("dashboard.importProject") }}
-          </button>
+      <!-- 内容区 -->
+      <div class="min-h-0 flex-1 overflow-auto">
+        <!-- 加载中 -->
+        <div v-if="projectStore.isLoading" class="flex h-full items-center justify-center">
+          <Loader2 class="h-6 w-6 animate-spin text-zinc-300" />
+          <span class="ml-2 text-sm text-zinc-400">{{ t("dashboard.loadingProjects") }}</span>
         </div>
 
-        <!-- Project List -->
-        <div v-else>
-          <!-- Table Header -->
-          <div
-            class="px-6 py-2 bg-slate-50 border-b border-zinc-200/80 grid grid-cols-[4fr_1.5fr_2fr_2.5fr_1.5fr] gap-4 text-[10px] font-semibold text-slate-400 uppercase tracking-wider sticky top-0 z-10">
-            <div>{{ t("dashboard.projectTable.project") }}</div>
-            <div>{{ t("dashboard.projectTable.environment") }}</div>
-            <div>{{ t("dashboard.projectTable.testsPassed") }}</div>
-            <div>{{ t("dashboard.projectTable.coverage") }}</div>
-            <div class="text-right">{{ t("dashboard.projectTable.lastRun") }}</div>
+        <!-- 首次启动：新手三步引导（导入 → 生成 → 运行测量） -->
+        <AppEmptyState
+          v-else-if="projectStore.projects.length === 0"
+          :icon="Code2"
+          :title="t('dashboard.welcome.title')"
+          :description="t('dashboard.welcome.description')"
+        >
+          <ol class="mx-auto mt-2 grid w-full max-w-2xl grid-cols-3 gap-3 text-left">
+            <li v-for="(step, i) in welcomeSteps" :key="i" class="card p-4">
+              <div class="font-mono text-[10px] font-semibold text-brand-500">0{{ i + 1 }}</div>
+              <div class="mt-1.5 text-[13px] font-semibold text-zinc-900">{{ step.title }}</div>
+              <div class="mt-1 text-xs leading-5 text-zinc-500">{{ step.desc }}</div>
+            </li>
+          </ol>
+          <div class="mt-6 flex items-center justify-center gap-2">
+            <AppButton variant="primary" @click="goToImport">
+              <FolderPlus class="h-4 w-4" />
+              {{ t("dashboard.importProject") }}
+            </AppButton>
+            <AppButton variant="secondary" @click="openCloneModal">
+              <GitBranch class="h-4 w-4" />
+              {{ t("dashboard.cloneRepository") }}
+            </AppButton>
           </div>
+        </AppEmptyState>
 
-          <!-- Rows -->
-          <div class="divide-y divide-zinc-200/80 bg-white">
-            <div v-for="project in filteredProjects" :key="project.id" @click="goToProject(project.id)"
-              @contextmenu="handleDelete(project.id, project.name)"
-              class="px-6 py-3.5 hover:bg-slate-50 transition-colors cursor-pointer grid grid-cols-[4fr_1.5fr_2fr_2.5fr_1.5fr] gap-4 items-center group">
-              <!-- Project Info -->
-              <div class="flex items-center gap-3 min-w-0">
-                <div
-                  class="w-8 h-8 bg-linear-to-br from-blue-500 to-blue-600 rounded-md flex items-center justify-center shrink-0">
-                  <Code2 class="w-4 h-4 text-white" />
+        <!-- 搜索无结果 -->
+        <AppEmptyState
+          v-else-if="visibleProjects.length === 0"
+          :icon="Search"
+          :title="t('dashboard.emptyState.searchNoMatch')"
+        />
+
+        <!-- 项目表格 -->
+        <div v-else class="px-5 py-4">
+          <div class="card overflow-hidden">
+            <!-- 表头 -->
+            <div
+              class="grid grid-cols-[3fr_1.2fr_1.3fr_1.6fr_1fr] gap-4 border-b border-border bg-zinc-50/70 px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400"
+            >
+              <div>{{ t("dashboard.projectTable.project") }}</div>
+              <div>{{ t("dashboard.projectTable.environment") }}</div>
+              <div>{{ t("dashboard.projectTable.testsPassed") }}</div>
+              <div>{{ t("dashboard.projectTable.coverage") }}</div>
+              <div class="text-right">{{ t("dashboard.projectTable.lastRun") }}</div>
+            </div>
+
+            <!-- 行 -->
+            <div class="divide-y divide-border">
+              <div
+                v-for="project in visibleProjects"
+                :key="project.id"
+                @click="goToProject(project.id)"
+                @contextmenu.prevent="handleDelete(project)"
+                class="group grid cursor-pointer grid-cols-[3fr_1.2fr_1.3fr_1.6fr_1fr] items-center gap-4 px-4 py-3 transition-colors hover:bg-zinc-50"
+              >
+                <!-- 项目信息 + 悬停删除 -->
+                <div class="flex min-w-0 items-center gap-3">
+                  <div
+                    class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500"
+                  >
+                    <Code2 class="h-4 w-4" />
+                  </div>
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-1.5">
+                      <span class="truncate text-[13px] font-medium text-zinc-800">{{
+                        project.name
+                      }}</span>
+                      <button
+                        type="button"
+                        class="shrink-0 rounded p-1 text-zinc-300 opacity-0 transition-all hover:bg-rose-50 hover:text-rose-500 focus-visible:opacity-100 group-hover:opacity-100"
+                        :aria-label="t('dashboard.deleteProject')"
+                        @click.stop="handleDelete(project)"
+                      >
+                        <Trash2 class="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <p class="truncate font-mono text-[10px] text-zinc-400">{{ project.path }}</p>
+                  </div>
                 </div>
-                <div class="min-w-0">
-                  <h4 class="text-[13px] font-medium text-slate-800 truncate">
-                    {{ project.name }}
-                  </h4>
-                  <p class="text-[10px] text-slate-500 font-mono truncate">
-                    {{ project.path }}
-                  </p>
+
+                <!-- 环境状态 -->
+                <div>
+                  <StatusPill :status="project.env_status" />
                 </div>
-              </div>
 
-              <!-- Environment Status with Tooltip -->
-              <div class="relative">
-                <button class="flex items-center gap-1.5 px-2 py-1 rounded hover:bg-slate-100 transition-colors">
-                  <span :class="`w-1.5 h-1.5 rounded-full ${getStatusColor(project.env_status)}`"></span>
-                  <span :class="`text-[11px] ${getStatusTextColor(project.env_status)}`">{{ project.env_status }}</span>
-                </button>
-                <!-- Tooltip -->
-                <!-- <div
-                  class="absolute top-full left-0 mt-1.5 w-52 bg-white border border-zinc-200 rounded-md shadow-md p-2.5 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-20 pointer-events-none">
-                  <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
-                    Environment Status
-                  </p>
-                  <ul class="space-y-1">
-                    <li v-for="(detail, idx) in project.env_details" :key="idx"
-                      class="flex items-center gap-2 text-[11px]">
-                      <component :is="getEnvIcon(detail)"
-                        :class="`w-3 h-3 ${detail.toLowerCase().includes('missing') || detail.toLowerCase().includes('not found') ? 'text-rose-500' : 'text-emerald-500'}`" />
-                      <span :class="detail.toLowerCase().includes('missing') ||
-                        detail.toLowerCase().includes('not found')
-                        ? 'text-rose-700'
-                        : 'text-slate-700'
-                        ">
-                        {{ detail }}
-                      </span>
-                    </li>
-                  </ul>
-                </div> -->
-              </div>
-
-              <!-- Test Result -->
-              <div class="flex items-center gap-2">
-                <span class="text-[11px] font-mono text-emerald-600">{{ t("dashboard.passedCount", { count: project.tests_passed }) }}</span>
-                <span class="text-slate-300">·</span>
-                <span class="text-[11px] font-mono text-rose-600">{{ t("dashboard.failedCount", { count: project.tests_failed }) }}</span>
-              </div>
-
-              <!-- Coverage -->
-              <div class="flex items-center gap-2">
-                <div class="flex-1 bg-slate-100 rounded-full h-1.5">
-                  <div :class="`h-1.5 rounded-full ${project.coverage < 80 ? 'bg-amber-500' : 'bg-emerald-500'}`"
-                    :style="{ width: `${project.coverage}%` }"></div>
+                <!-- 测试结果 -->
+                <div class="flex items-center gap-1.5 font-mono text-[11px]">
+                  <span class="text-emerald-600">{{
+                    t("dashboard.passedCount", { count: project.tests_passed })
+                  }}</span>
+                  <span class="text-zinc-300">·</span>
+                  <span class="text-rose-600">{{
+                    t("dashboard.failedCount", { count: project.tests_failed })
+                  }}</span>
                 </div>
-                <span class="text-[11px] font-mono text-slate-600 w-10 text-right">{{ project.coverage }}%</span>
-              </div>
 
-              <!-- Last Run -->
-              <div class="text-right">
-                <span class="text-[11px] text-slate-500">{{
-                  project.last_run ?? t("common.never")
-                }}</span>
+                <!-- 覆盖率 -->
+                <div class="flex items-center gap-2.5">
+                  <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-100">
+                    <div
+                      class="h-full rounded-full transition-all"
+                      :class="coverageTone(project.coverage)"
+                      :style="{ width: `${Math.min(100, Math.max(0, project.coverage))}%` }"
+                    />
+                  </div>
+                  <span class="w-9 text-right font-mono text-[11px] text-zinc-600"
+                    >{{ project.coverage.toFixed(2) }}%</span
+                  >
+                </div>
+
+                <!-- 上次运行 -->
+                <div class="text-right font-mono text-[11px] text-zinc-400">
+                  {{ project.last_run ?? t("common.never") }}
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- BOTTOM STATUS BAR -->
-      <div
-        class="h-7 px-4 flex items-center justify-between border-t border-zinc-200/80 bg-white text-[10px] text-slate-500">
+      <!-- 底部状态栏 -->
+      <footer
+        class="flex h-8 shrink-0 items-center justify-between border-t border-border bg-white px-4 text-[10px] text-zinc-500"
+      >
         <div class="flex items-center gap-4">
-          <div class="flex items-center gap-1.5">
-            <Terminal class="w-3 h-3" />
-            <span class="font-mono">{{
+          <div class="flex items-center gap-1.5 font-mono">
+            <Terminal class="h-3 w-3" />
+            <span>{{
               pythonVersion
                 ? `${pythonVersion}${pythonVenv ? " (venv)" : " (global)"}`
                 : t("app.statusBar.pythonNotDetected")
             }}</span>
           </div>
           <div class="flex items-center gap-1.5">
-            <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>
+            <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
             <span>{{ t("app.statusBar.ipcConnected") }}</span>
           </div>
         </div>
@@ -494,66 +456,72 @@ const handleDelete = async (projectId: number, projectName: string) => {
           <span>{{ t("app.statusBar.projects", { count: projectStore.stats.total_projects }) }}</span>
           <span>{{ t("app.statusBar.totalRuns", { count: projectStore.stats.total_runs }) }}</span>
         </div>
-      </div>
+      </footer>
     </main>
 
-    <!-- Clone Repository Modal -->
-    <div v-if="showCloneModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
-      @click.self="showCloneModal = false">
-      <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
-        <div class="flex items-start justify-between gap-4">
-          <div>
-            <h3 class="text-sm font-semibold text-slate-900">{{ t("dashboard.cloneModal.title") }}</h3>
-
-            <p class="mt-1 text-xs text-slate-500">
-              {{ t("dashboard.cloneModal.description") }}
-            </p>
-          </div>
-
-          <button type="button" class="rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
-            @click="showCloneModal = false">
-            <X class="h-4 w-4" />
-          </button>
+    <!-- 克隆仓库弹窗（统一 AppModal + 统一主色按钮） -->
+    <AppModal
+      v-model:open="showCloneModal"
+      :title="t('dashboard.cloneModal.title')"
+      :description="t('dashboard.cloneModal.description')"
+    >
+      <div class="space-y-4">
+        <div>
+          <label class="label" for="clone-url">{{ t("dashboard.cloneModal.repoUrl") }}</label>
+          <input
+            id="clone-url"
+            v-model="cloneUrl"
+            type="text"
+            class="input mt-1.5"
+            :placeholder="t('dashboard.cloneModal.repoUrlPlaceholder')"
+            @keyup.enter="cloneRepository"
+          />
         </div>
 
-        <label class="mt-4 block text-xs font-medium text-slate-700">
-          {{ t("dashboard.cloneModal.repoUrl") }}
-          <input v-model="cloneUrl" type="text" :placeholder="t('dashboard.cloneModal.repoUrlPlaceholder')"
-            class="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-            @keyup.enter="cloneRepository" />
-        </label>
-
-        <label class="mt-4 block text-xs font-medium text-slate-700">
-          {{ t("dashboard.cloneModal.destFolder") }}
-          <button type="button"
-            class="mt-1.5 flex w-full items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm transition hover:bg-slate-50"
-            @click="chooseCloneDir">
-            <span :class="cloneTargetDir ? 'text-slate-700' : 'text-slate-400'">
+        <div>
+          <span class="label">{{ t("dashboard.cloneModal.destFolder") }}</span>
+          <button
+            type="button"
+            class="input mt-1.5 flex items-center justify-between text-left transition-colors hover:bg-zinc-50"
+            @click="chooseCloneDir"
+          >
+            <span class="truncate" :class="cloneTargetDir ? 'text-zinc-800' : 'text-zinc-400'">
               {{ cloneTargetDir || t("dashboard.cloneModal.chooseFolder") }}
             </span>
-            <FolderPlus class="h-4 w-4 shrink-0 text-slate-400" />
+            <FolderPlus class="h-4 w-4 shrink-0 text-zinc-400" />
           </button>
-        </label>
+        </div>
 
-        <div v-if="cloneError" class="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700">
+        <div
+          v-if="cloneError"
+          class="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700"
+        >
           {{ cloneError }}
         </div>
-
-        <div class="mt-5 flex items-center justify-end gap-2">
-          <button type="button"
-            class="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100"
-            @click="showCloneModal = false">
-            {{ t("common.cancel") }}
-          </button>
-
-          <button type="button" :disabled="!cloneUrl.trim() || !cloneTargetDir || isCloning"
-            class="inline-flex items-center gap-2 rounded-xl bg-blue-500 px-5 py-2 text-sm font-medium text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
-            @click="cloneRepository">
-            <GitBranch class="h-4 w-4" />
-            {{ isCloning ? t("dashboard.cloneModal.cloning") : t("dashboard.cloneModal.cloneImport") }}
-          </button>
-        </div>
       </div>
-    </div>
+
+      <template #footer>
+        <AppButton variant="ghost" @click="showCloneModal = false">{{ t("common.cancel") }}</AppButton>
+        <AppButton
+          variant="primary"
+          :loading="isCloning"
+          :disabled="!cloneUrl.trim() || !cloneTargetDir"
+          @click="cloneRepository"
+        >
+          <GitBranch class="h-4 w-4" />
+          {{ isCloning ? t("dashboard.cloneModal.cloning") : t("dashboard.cloneModal.cloneImport") }}
+        </AppButton>
+      </template>
+    </AppModal>
+
+    <!-- 删除项目确认（统一弹窗，替代原生 ask） -->
+    <AppConfirmModal
+      :open="deleteTarget !== null"
+      :title="t('common.delete')"
+      :description="deleteTarget ? t('dashboard.deleteConfirm', { name: deleteTarget.name }) : ''"
+      :confirm-label="t('common.delete')"
+      @confirm="confirmDeleteProject"
+      @update:open="(open: boolean) => { if (!open) deleteTarget = null }"
+    />
   </div>
 </template>

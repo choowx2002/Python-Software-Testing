@@ -1,126 +1,124 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+/**
+ * 项目上下文 Layout —— 第三批
+ *  - 侧边栏：项目卡（含迷你覆盖率条）+ 四个功能区导航（Overview → Generate → Execute → Coverage）
+ *  - 右侧概览面板已抽离为独立 Overview 页，主区域全宽给子页面
+ *  - 环境状态接入 StatusPill；返回按钮走 AppSidebar footer 插槽
+ */
+import { computed, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import {
   ArrowLeft,
-  RefreshCw,
-  FolderOpen,
-  Play,
-  WandSparkles,
-  Gauge,
   FileText,
-  CheckCircle2,
-  AlertCircle,
-  XCircle,
-  Clock3,
-  ExternalLink,
-  Settings2,
-} from '@lucide/vue'
-import { useProjectStore, type Project } from '../../stores/projectStore'
-import { invoke } from '@tauri-apps/api/core'
-import { useI18n } from 'vue-i18n'
+  FolderOpen,
+  Gauge,
+  History,
+  LayoutDashboard,
+  Play,
+  RefreshCw,
+  WandSparkles,
+} from "@lucide/vue";
+import { useProjectStore, type Project } from "../../stores/projectStore";
+import { invoke } from "@tauri-apps/api/core";
+import { useI18n } from "vue-i18n";
+import AppSidebar from "../../components/AppSidebar.vue";
+import AppNavItem from "../../components/ui/AppNavItem.vue";
+import AppButton from "../../components/ui/AppButton.vue";
+import StatusPill from "../../components/ui/StatusPill.vue";
 
-type ProjectRouteName = 'ProjectExecute' | 'ProjectGenerate' | 'ProjectCoverage'
+type ProjectRouteName =
+  | "ProjectOverview"
+  | "ProjectExecute"
+  | "ProjectGenerate"
+  | "ProjectCoverage"
+  | "ProjectHistory";
 
-const route = useRoute()
-const router = useRouter()
-const projectStore = useProjectStore()
-const { t } = useI18n()
+const route = useRoute();
+const router = useRouter();
+const projectStore = useProjectStore();
+const { t } = useI18n();
 
-const isRefreshing = ref(false)
-const localError = ref<string | null>(null)
+const isRefreshing = ref(false);
+const localError = ref<string | null>(null);
 
-const projectId = computed(() => Number(route.params.id))
+const projectId = computed(() => Number(route.params.id));
 
 const currentProject = computed<Project | undefined>(() => {
-  if (Number.isNaN(projectId.value)) return undefined
-  return projectStore.projects.find((p) => p.id === projectId.value)
-})
+  if (Number.isNaN(projectId.value)) return undefined;
+  return projectStore.projects.find((p) => p.id === projectId.value);
+});
 
+/* ---------------- 功能区导航（Overview 为项目首页，随后按工作流顺序） ---------------- */
 const navItems = computed(() => [
   {
-    name: 'ProjectExecute' as const,
-    label: t('layout.tabs.execute'),
-    desc: t('layout.tabs.execute'),
-    icon: Play,
+    name: "ProjectOverview" as const,
+    label: t("layout.tabs.overview"),
+    desc: t("layout.tabsDesc.overview"),
+    icon: LayoutDashboard,
   },
   {
-    name: 'ProjectGenerate' as const,
-    label: t('layout.tabs.generate'),
-    desc: t('layout.tabs.generate'),
+    name: "ProjectGenerate" as const,
+    label: t("layout.tabs.generate"),
+    desc: t("layout.tabsDesc.generate"),
     icon: WandSparkles,
   },
   {
-    name: 'ProjectCoverage' as const,
-    label: t('layout.tabs.coverage'),
-    desc: t('layout.tabs.coverage'),
+    name: "ProjectExecute" as const,
+    label: t("layout.tabs.execute"),
+    desc: t("layout.tabsDesc.execute"),
+    icon: Play,
+  },
+  {
+    name: "ProjectCoverage" as const,
+    label: t("layout.tabs.coverage"),
+    desc: t("layout.tabsDesc.coverage"),
     icon: Gauge,
   },
-])
+  {
+    name: "ProjectHistory" as const,
+    label: t("layout.tabs.history"),
+    desc: t("layout.tabsDesc.history"),
+    icon: History,
+  },
+]);
 
-const currentSection = computed(() => {
-  return navItems.value.find((item) => item.name === route.name) ?? navItems.value[0]
-})
-
-const statusMeta = computed(() => {
-  const status = currentProject.value?.env_status ?? 'Warning'
-
+/* ---------------- 环境状态（文案映射，视觉交给 StatusPill） ---------------- */
+const statusLabel = computed(() => {
+  const status = currentProject.value?.env_status ?? "Warning";
   switch (status) {
-    case 'Ready':
-      return {
-        text: t('layout.statusReady'),
-        color: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-        icon: CheckCircle2,
-      }
-    case 'Warning':
-      return {
-        text: t('layout.statusWarning'),
-        color: 'bg-amber-50 text-amber-700 border-amber-200',
-        icon: AlertCircle,
-      }
-    case 'Failed':
-      return {
-        text: t('layout.statusFailed'),
-        color: 'bg-rose-50 text-rose-700 border-rose-200',
-        icon: XCircle,
-      }
-    case 'active':
-      return {
-        text: t('layout.statusActive'),
-        color: 'bg-sky-50 text-sky-700 border-sky-200',
-        icon: Clock3,
-      }
+    case "Ready":
+      return t("layout.statusReady");
+    case "Warning":
+      return t("layout.statusWarning");
+    case "Failed":
+      return t("layout.statusFailed");
+    case "active":
+      return t("layout.statusActive");
     default:
-      return {
-        text: String(status),
-        color: 'bg-slate-50 text-slate-700 border-slate-200',
-        icon: AlertCircle,
-      }
+      return status;
   }
-})
+});
 
+/* 侧栏迷你覆盖率条 */
 const safeCoverage = computed(() => {
-  const value = currentProject.value?.coverage
-  if (typeof value !== 'number') return 0
-  return Math.max(0, Math.min(100, value))
-})
+  const value = currentProject.value?.coverage;
+  if (typeof value !== "number") return 0;
+  return Math.max(0, Math.min(100, value));
+});
 
+/* ---------------- 动作 ---------------- */
 function goBack() {
-  router.push({ name: 'Dashboard' })
+  router.push({ name: "Dashboard" });
 }
 
 function goToSection(name: ProjectRouteName) {
-  if (Number.isNaN(projectId.value)) return
-  router.push({
-    name,
-    params: { id: projectId.value },
-  })
+  if (Number.isNaN(projectId.value)) return;
+  router.push({ name, params: { id: projectId.value } });
 }
 
 async function openProjectFolder() {
   const projectPath = currentProject.value?.path;
   if (!projectPath) return;
-
   try {
     await invoke("open_in_file_manager", { path: projectPath });
   } catch (error) {
@@ -130,324 +128,187 @@ async function openProjectFolder() {
 
 async function refreshProject() {
   if (Number.isNaN(projectId.value)) {
-    localError.value = t('layout.invalidId')
-    return
+    localError.value = t("layout.invalidId");
+    return;
   }
 
-  isRefreshing.value = true
-  localError.value = null
+  isRefreshing.value = true;
+  localError.value = null;
 
   try {
-    await projectStore.fetchProjects()
-    await projectStore.updateLastOpened(projectId.value)
+    await projectStore.fetchProjects();
+    await projectStore.updateLastOpened(projectId.value);
   } catch (error) {
-    console.error('[ProjectLayout] refreshProject failed:', error)
-    localError.value = t('layout.refreshFailed')
+    console.error("[ProjectLayout] refreshProject failed:", error);
+    localError.value = t("layout.refreshFailed");
   } finally {
-    isRefreshing.value = false
+    isRefreshing.value = false;
   }
 }
 
 async function ensureProjectLoaded() {
   if (Number.isNaN(projectId.value)) {
-    localError.value = t('layout.invalidId')
-    return
+    localError.value = t("layout.invalidId");
+    return;
   }
 
   try {
-    localError.value = null
+    localError.value = null;
 
     if (projectStore.projects.length === 0) {
-      await projectStore.fetchProjects()
+      await projectStore.fetchProjects();
     }
 
-    const found = projectStore.projects.find((p) => p.id === projectId.value)
+    const found = projectStore.projects.find((p) => p.id === projectId.value);
     if (!found) {
-      localError.value = t('layout.projectNotFound', { id: projectId.value })
-      return
+      localError.value = t("layout.projectNotFound", { id: projectId.value });
+      return;
     }
 
-    await projectStore.updateLastOpened(projectId.value)
+    await projectStore.updateLastOpened(projectId.value);
   } catch (error) {
-    console.error('[ProjectLayout] ensureProjectLoaded failed:', error)
-    localError.value = t('layout.loadFailed')
+    console.error("[ProjectLayout] ensureProjectLoaded failed:", error);
+    localError.value = t("layout.loadFailed");
   }
 }
 
 watch(
   () => route.params.id,
   () => {
-    ensureProjectLoaded()
+    ensureProjectLoaded();
   },
-  { immediate: true }
-)
+  { immediate: true },
+);
 
 onMounted(() => {
-  ensureProjectLoaded()
-})
+  ensureProjectLoaded();
+});
 </script>
 
 <template>
-  <div class="flex h-screen w-screen overflow-hidden bg-slate-50 text-slate-900">
-    <!-- Left sidebar -->
-    <aside class="flex w-75 shrink-0 flex-col border-r border-slate-200 bg-white">
-      <div class="border-b border-slate-200 px-5 pt-6 pb-5">
-        <div class="flex items-center gap-3">
-          <div class="flex h-10 w-10 items-center justify-center rounded-2xl bg-emerald-500 text-white shadow-sm">
-            <Settings2 class="h-5 w-5" />
-          </div>
-          <div>
-            <div class="text-sm font-semibold text-slate-900">{{ t('layout.context') }}</div>
-            <div class="text-xs text-slate-500">{{ t('layout.contextDesc') }}</div>
-          </div>
+  <div class="flex h-screen w-screen overflow-hidden bg-surface text-zinc-900">
+    <!-- 统一侧边栏 -->
+    <AppSidebar>
+      <!-- 当前项目卡 -->
+      <div class="mb-4 rounded-xl border border-border bg-zinc-50 p-3.5">
+        <div class="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+          {{ t("layout.currentProject") }}
+        </div>
+        <div class="mt-1.5 truncate text-sm font-semibold text-zinc-900">
+          {{ currentProject?.name ?? t("layout.notLoaded") }}
+        </div>
+        <div class="mt-0.5 break-all font-mono text-[10px] leading-4 text-zinc-400">
+          {{ currentProject?.path ?? t("layout.loadingPath") }}
+        </div>
+        <div class="mt-2.5 flex items-center gap-2">
+          <StatusPill :status="currentProject?.env_status ?? 'Warning'" :label="statusLabel" />
+          <span class="font-mono text-[10px] text-zinc-400">ID {{ projectId }}</span>
         </div>
 
-        <div class="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-          <div class="text-[11px] font-medium uppercase tracking-wider text-slate-500">
-            {{ t('layout.currentProject') }}
-          </div>
-
-          <div class="mt-2 text-base font-semibold text-slate-900">
-            {{ currentProject?.name ?? t('layout.notLoaded') }}
-          </div>
-
-          <div class="mt-1 break-all text-xs leading-5 text-slate-500">
-            {{ currentProject?.path ?? t('layout.loadingPath') }}
-          </div>
-
-          <div class="mt-3 flex items-center gap-2">
-            <span
-              class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium"
-              :class="statusMeta.color"
-            >
-              <component :is="statusMeta.icon" class="h-3.5 w-3.5" />
-              {{ statusMeta.text }}
-            </span>
-
-            <span class="text-[11px] text-slate-500">
-              ID {{ projectId }}
-            </span>
-          </div>
+        <!-- 迷你覆盖率条（替代原右侧面板的"一瞥可见"） -->
+        <div class="mt-2.5 h-1 overflow-hidden rounded-full bg-zinc-200">
+          <div
+            class="h-full rounded-full transition-all"
+            :class="safeCoverage >= 80 ? 'bg-emerald-500' : 'bg-amber-500'"
+            :style="{ width: `${safeCoverage}%` }"
+          />
+        </div>
+        <div class="mt-1 flex items-center justify-between font-mono text-[10px] text-zinc-400">
+          <span>{{ t("layout.overviewItems.coverage") }}</span>
+          <span>{{ safeCoverage.toFixed(1) }}%</span>
         </div>
       </div>
 
-      <div class="flex-1 overflow-auto px-3 py-4">
-        <div class="px-2 pb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-          {{ t('layout.pageNav') }}
-        </div>
-
-        <div class="space-y-1">
-          <button
-            v-for="item in navItems"
-            :key="item.name"
-            type="button"
-            @click="goToSection(item.name)"
-            class="w-full rounded-2xl border px-3 py-3 text-left transition hover:bg-slate-50"
-            :class="
-              route.name === item.name
-                ? 'border-emerald-200 bg-emerald-50'
-                : 'border-transparent bg-white'
-            "
-          >
-            <div class="flex items-start gap-3">
-              <div
-                class="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl"
-                :class="
-                  route.name === item.name
-                    ? 'bg-emerald-500 text-white'
-                    : 'bg-slate-100 text-slate-600'
-                "
-              >
-                <component :is="item.icon" class="h-4 w-4" />
-              </div>
-
-              <div class="min-w-0 flex-1">
-                <div class="text-sm font-medium text-slate-900">
-                  {{ item.label }}
-                </div>
-                <div class="mt-0.5 text-xs leading-5 text-slate-500">
-                  {{ item.desc }}
-                </div>
-              </div>
-            </div>
-          </button>
-        </div>
+      <!-- 功能区导航 -->
+      <p class="section-label mb-1.5">{{ t("layout.pageNav") }}</p>
+      <div class="space-y-0.5">
+        <AppNavItem
+          v-for="item in navItems"
+          :key="item.name"
+          :icon="item.icon"
+          :label="item.label"
+          :description="item.desc"
+          :active="route.name === item.name"
+          @click="goToSection(item.name)"
+        />
       </div>
 
-      <div class="border-t border-slate-200 p-4">
-        <button
-          type="button"
-          @click="goBack"
-          class="flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-        >
+      <!-- 返回按钮 -->
+      <template #footer>
+        <AppButton variant="secondary" class="w-full" @click="goBack">
           <ArrowLeft class="h-4 w-4" />
-          {{ t('layout.backToDashboard') }}
-        </button>
-      </div>
-    </aside>
+          {{ t("layout.backToDashboard") }}
+        </AppButton>
+      </template>
+    </AppSidebar>
 
-    <!-- Main area -->
+    <!-- 主区域 -->
     <main class="flex min-w-0 flex-1 flex-col">
-      <header class="border-b border-slate-200 bg-white px-6 py-4">
-        <div class="flex items-start justify-between gap-4">
-          <div class="min-w-0">
-            <div class="flex items-center gap-2 text-sm text-slate-500">
-              <button
-                type="button"
-                class="inline-flex items-center gap-1 rounded-lg px-2 py-1 transition hover:bg-slate-100"
-                @click="goBack"
-              >
-                <ArrowLeft class="h-4 w-4" />
-                {{ t('layout.breadcrumbProjects') }}
-              </button>
-              <span>/</span>
-              <span class="font-medium text-slate-700">
-                {{ t('layout.projectLabel', { id: projectId }) }}
-              </span>
-              <span>/</span>
-              <span class="font-medium text-slate-900">
-                {{ currentSection.label }}
-              </span>
-            </div>
-
-            <div class="mt-2 flex items-center gap-3">
-              <h1 class="truncate text-xl font-semibold text-slate-900">
-                {{ currentProject?.name ?? t('layout.context') }}
-              </h1>
-
-              <span
-                class="inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium text-slate-500"
-              >
-                <FileText class="mr-1.5 h-3.5 w-3.5" />
-                {{ currentProject?.interpreter_path ?? t('layout.noInterpreter') }}
-              </span>
-            </div>
-
-            <p class="mt-1 truncate text-sm text-slate-500">
-              {{ currentProject?.path ?? t('layout.waitingData') }}
-            </p>
-          </div>
-
-          <div class="flex shrink-0 items-center gap-2">
+      <!-- 顶部工具栏 -->
+      <header class="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border bg-white px-5">
+        <div class="flex min-w-0 items-center gap-3">
+          <!-- 面包屑：Projects / 项目名 -->
+          <div class="flex min-w-0 items-center gap-1.5 text-[13px]">
             <button
               type="button"
-              @click="openProjectFolder"
-              class="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              class="shrink-0 rounded px-1.5 py-0.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700"
+              @click="goBack"
             >
-              <FolderOpen class="h-4 w-4" />
-              {{ t('layout.openFolder') }}
+              {{ t("layout.breadcrumbProjects") }}
             </button>
-
-            <button
-              type="button"
-              @click="refreshProject"
-              :disabled="isRefreshing"
-              class="inline-flex items-center gap-2 rounded-2xl bg-emerald-500 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <RefreshCw :class="['h-4 w-4', isRefreshing ? 'animate-spin' : '']" />
-              {{ t('common.refresh') }}
-            </button>
+            <span class="text-zinc-300">/</span>
+            <h1 class="truncate text-sm font-semibold text-zinc-900">
+              {{ currentProject?.name ?? t("layout.context") }}
+            </h1>
           </div>
+
+          <!-- 解释器路径徽章 -->
+          <span
+            class="hidden max-w-64 items-center gap-1.5 truncate rounded-full border border-border px-2 py-0.5 font-mono text-[10px] text-zinc-500 md:inline-flex"
+            :title="currentProject?.interpreter_path ?? undefined"
+          >
+            <FileText class="h-3 w-3 shrink-0" />
+            <span class="truncate">{{ currentProject?.interpreter_path ?? t("layout.noInterpreter") }}</span>
+          </span>
+        </div>
+
+        <div class="flex shrink-0 items-center gap-2">
+          <AppButton variant="secondary" @click="openProjectFolder">
+            <FolderOpen class="h-4 w-4" />
+            {{ t("layout.openFolder") }}
+          </AppButton>
+          <AppButton variant="primary" :loading="isRefreshing" @click="refreshProject">
+            <RefreshCw v-if="!isRefreshing" class="h-4 w-4" />
+            {{ t("common.refresh") }}
+          </AppButton>
         </div>
       </header>
 
-      <div v-if="localError" class="px-6 pt-4">
-        <div class="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+      <!-- 错误横幅 -->
+      <div v-if="localError" class="px-5 pt-4">
+        <div class="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
           {{ localError }}
         </div>
       </div>
 
-      <section class="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden p-4 xl:grid-cols-[1fr_320px]">
-        <!-- Child page area -->
-        <div class="min-h-0 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-          <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-            <div>
-              <div class="text-sm font-semibold text-slate-900">
-                {{ currentSection.label }}
-              </div>
-              <div class="mt-0.5 text-xs text-slate-500">
-                {{ currentSection.desc }}
-              </div>
-            </div>
-
-            <div class="flex items-center gap-2 text-xs text-slate-500">
-              <span class="rounded-full bg-slate-100 px-2.5 py-1">
-                Route: {{ String(route.name ?? '') }}
-              </span>
-            </div>
-          </div>
-
-          <div class="h-[calc(100%-65px)] min-h-0 overflow-auto p-5">
-            <RouterView />
+      <!-- 内容区：子页面全宽 -->
+      <section class="min-h-0 flex-1 overflow-hidden p-4">
+        <div class="card h-full min-h-0 overflow-hidden">
+          <div class="h-full min-h-0 overflow-auto">
+            <RouterView v-slot="{ Component }">
+              <Transition name="fade-slide" mode="out-in">
+                <component :is="Component" />
+              </Transition>
+            </RouterView>
           </div>
         </div>
-
-        <!-- Right info panel -->
-        <aside class="min-h-0 overflow-auto rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div class="flex items-center gap-2 text-sm font-semibold text-slate-900">
-            <ExternalLink class="h-4 w-4 text-slate-500" />
-            {{ t('layout.overview') }}
-          </div>
-
-          <div class="mt-4 space-y-3">
-            <div class="rounded-2xl bg-slate-50 p-4">
-              <div class="text-[11px] font-medium uppercase tracking-wider text-slate-500">
-                {{ t('layout.overviewItems.coverage') }}
-              </div>
-              <div class="mt-2 text-3xl font-semibold text-slate-900">
-                {{ safeCoverage.toFixed(1) }}%
-              </div>
-              <div class="mt-3 h-2 rounded-full bg-slate-200">
-                <div
-                  class="h-2 rounded-full bg-emerald-500 transition-all"
-                  :style="{ width: `${safeCoverage}%` }"
-                />
-              </div>
-            </div>
-
-            <div class="grid grid-cols-2 gap-3">
-              <div class="rounded-2xl border border-slate-200 p-4">
-                <div class="text-[11px] text-slate-500">{{ t('layout.pass') }}</div>
-                <div class="mt-1 text-xl font-semibold text-slate-900">
-                  {{ currentProject?.tests_passed ?? 0 }}
-                </div>
-              </div>
-
-              <div class="rounded-2xl border border-slate-200 p-4">
-                <div class="text-[11px] text-slate-500">{{ t('layout.fail') }}</div>
-                <div class="mt-1 text-xl font-semibold text-slate-900">
-                  {{ currentProject?.tests_failed ?? 0 }}
-                </div>
-              </div>
-            </div>
-
-            <div class="rounded-2xl border border-slate-200 p-4">
-              <div class="text-[11px] font-medium uppercase tracking-wider text-slate-500">
-                {{ t('layout.lastRun') }}
-              </div>
-              <div class="mt-2 text-sm font-medium text-slate-900">
-                {{ currentProject?.last_run ?? t('layout.overviewItems.never') }}
-              </div>
-            </div>
-
-            <div class="rounded-2xl border border-slate-200 p-4">
-              <div class="text-[11px] font-medium uppercase tracking-wider text-slate-500">
-                {{ t('layout.tipTitle') }}
-              </div>
-              <ul class="mt-2 space-y-2 text-sm leading-6 text-slate-600">
-                <li>• {{ t('layout.tipExecute') }}</li>
-                <li>• {{ t('layout.tipGenerate') }}</li>
-                <li>• {{ t('layout.tipCoverage') }}</li>
-              </ul>
-            </div>
-          </div>
-        </aside>
       </section>
     </main>
   </div>
 </template>
 
 <style scoped>
+/* 子页面切换过渡 */
 .fade-slide-enter-active,
 .fade-slide-leave-active {
   transition:
@@ -459,5 +320,12 @@ onMounted(() => {
 .fade-slide-leave-to {
   opacity: 0;
   transform: translateY(6px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-slide-enter-active,
+  .fade-slide-leave-active {
+    transition: none;
+  }
 }
 </style>

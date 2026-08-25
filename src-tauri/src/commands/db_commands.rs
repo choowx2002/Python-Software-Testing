@@ -121,3 +121,78 @@ pub async fn get_global_stats(
 ) -> Result<crate::db::GlobalStatsRow, String> {
     crate::db::get_global_stats(&app).await
 }
+
+/// 读取某项目的测试执行历史（最近 100 条）
+#[tauri::command]
+pub async fn list_execution_history(
+    app: tauri::AppHandle,
+    project_id: i64,
+) -> Result<Vec<crate::db::ExecutionHistoryRow>, String> {
+    crate::db::list_execution_history(&app, project_id).await
+}
+
+/// 写入一次测试生成历史（Pynguin），返回记录 id
+#[tauri::command]
+pub async fn save_generation_history(
+    app: tauri::AppHandle,
+    project_id: i64,
+    generation_status: String,
+    total_files: i64,
+    generated_files: i64,
+    duration: f64,
+    command: Option<String>,
+) -> Result<i64, String> {
+    crate::db::save_generation_history(
+        &app,
+        project_id,
+        &generation_status,
+        total_files,
+        generated_files,
+        duration,
+        command,
+    )
+    .await
+}
+
+/// 读取某项目的测试生成历史（最近 100 条）
+#[tauri::command]
+pub async fn list_generation_history(
+    app: tauri::AppHandle,
+    project_id: i64,
+) -> Result<Vec<crate::db::GenerationHistoryRow>, String> {
+    crate::db::list_generation_history(&app, project_id).await
+}
+
+/// 写入一次覆盖率运行历史，返回记录 id
+#[tauri::command]
+pub async fn save_coverage_history(
+    app: tauri::AppHandle,
+    project_id: i64,
+    coverage_status: String,
+    percent_covered: f64,
+    total_statements: i64,
+    covered_statements: i64,
+    duration: f64,
+    command: Option<String>,
+) -> Result<i64, String> {
+    crate::db::save_coverage_history(
+        &app,
+        project_id,
+        &coverage_status,
+        percent_covered,
+        total_statements,
+        covered_statements,
+        duration,
+        command,
+    )
+    .await
+}
+
+/// 读取某项目的覆盖率运行历史（最近 100 条）
+#[tauri::command]
+pub async fn list_coverage_history(
+    app: tauri::AppHandle,
+    project_id: i64,
+) -> Result<Vec<crate::db::CoverageHistoryRow>, String> {
+    crate::db::list_coverage_history(&app, project_id).await
+}

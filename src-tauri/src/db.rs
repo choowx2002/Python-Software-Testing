@@ -89,6 +89,36 @@ const INIT_SQL: &str = "
 
     CREATE INDEX IF NOT EXISTS idx_project_id ON test_execution_history(project_id);
     CREATE INDEX IF NOT EXISTS idx_execution_id ON coverage_results(execution_id);
+
+    -- 5. Generation History Table（Pynguin 生成历史）
+    CREATE TABLE IF NOT EXISTS generation_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      generation_status VARCHAR(20) NOT NULL,
+      total_files INTEGER NOT NULL DEFAULT 0,
+      generated_files INTEGER NOT NULL DEFAULT 0,
+      duration REAL NOT NULL DEFAULT 0,
+      command TEXT,
+      executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+
+    -- 6. Coverage History Table（覆盖率运行历史）
+    CREATE TABLE IF NOT EXISTS coverage_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      coverage_status VARCHAR(20) NOT NULL,
+      percent_covered REAL NOT NULL DEFAULT 0,
+      total_statements INTEGER NOT NULL DEFAULT 0,
+      covered_statements INTEGER NOT NULL DEFAULT 0,
+      duration REAL NOT NULL DEFAULT 0,
+      command TEXT,
+      executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_gen_history_project ON generation_history(project_id);
+    CREATE INDEX IF NOT EXISTS idx_cov_history_project ON coverage_history(project_id);
 ";
 
 /// 初始化数据库表结构（幂等）。
@@ -148,10 +178,10 @@ pub async fn get_projects(app: &AppHandle) -> Result<Vec<ProjectRow>, String> {
             COALESCE((SELECT SUM(passed) FROM test_execution_history t WHERE t.project_id = p.id), 0) AS tests_passed,
             COALESCE((SELECT SUM(failed) FROM test_execution_history t WHERE t.project_id = p.id), 0) AS tests_failed,
             (SELECT MAX(executed_at) FROM test_execution_history t WHERE t.project_id = p.id) AS last_run,
-            COALESCE((SELECT c.total_statement_coverage
+            CAST(COALESCE((SELECT c.total_statement_coverage
                        FROM coverage_results c
                        WHERE c.project_id = p.id
-                       ORDER BY c.id DESC LIMIT 1), 0) AS coverage
+                       ORDER BY c.id DESC LIMIT 1), 0) AS REAL) AS coverage
           FROM projects p
           ORDER BY p.created_at DESC",
     )
@@ -234,6 +264,22 @@ pub async fn update_project_name(
     Ok(())
 }
 
+/// 更新项目解释器路径（一键修复环境后写入新 venv 的 python）
+pub async fn update_project_interpreter(
+    app: &AppHandle,
+    project_id: i64,
+    interpreter_path: &str,
+) -> Result<(), String> {
+    let db = pool(app).await?;
+    sqlx::query("UPDATE projects SET interpreter_path = ? WHERE id = ?")
+        .bind(interpreter_path)
+        .bind(project_id)
+        .execute(&db)
+        .await
+        .map_err(|e| format!("Failed to update interpreter path: {}", e))?;
+    Ok(())
+}
+
 /// 删除项目及其关联数据（coverage_results 无级联外键，需显式清理）
 pub async fn delete_project(app: &AppHandle, project_id: i64) -> Result<(), String> {
     let db = pool(app).await?;
@@ -257,6 +303,16 @@ pub async fn delete_project(app: &AppHandle, project_id: i64) -> Result<(), Stri
         .execute(&mut *tx)
         .await
         .map_err(|e| format!("Failed to delete regression suites: {}", e))?;
+    sqlx::query("DELETE FROM generation_history WHERE project_id = ?")
+        .bind(project_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to delete generation history: {}", e))?;
+    sqlx::query("DELETE FROM coverage_history WHERE project_id = ?")
+        .bind(project_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to delete coverage history: {}", e))?;
     sqlx::query("DELETE FROM projects WHERE id = ?")
         .bind(project_id)
         .execute(&mut *tx)
@@ -371,14 +427,14 @@ pub async fn get_global_stats(app: &AppHandle) -> Result<GlobalStatsRow, String>
     let db = pool(app).await?;
     let row = sqlx::query(
         "SELECT
-            COALESCE((SELECT AVG(
+            CAST(COALESCE((SELECT AVG(
               CASE WHEN (passed + failed + skipped) > 0
                 THEN passed * 100.0 / (passed + failed + skipped)
                 ELSE NULL END
-            ) FROM test_execution_history), 0) AS avg_pass_rate,
-            COALESCE((SELECT AVG(c.total_statement_coverage)
+            ) FROM test_execution_history), 0) AS REAL) AS avg_pass_rate,
+            CAST(COALESCE((SELECT AVG(c.total_statement_coverage)
               FROM coverage_results c
-              WHERE c.id IN (SELECT MAX(id) FROM coverage_results GROUP BY project_id)), 0) AS avg_coverage",
+              WHERE c.id IN (SELECT MAX(id) FROM coverage_results GROUP BY project_id)), 0) AS REAL) AS avg_coverage",
     )
     .fetch_one(&db)
     .await
@@ -388,4 +444,350 @@ pub async fn get_global_stats(app: &AppHandle) -> Result<GlobalStatsRow, String>
         avg_pass_rate: row.try_get("avg_pass_rate").map_err(|e| e.to_string())?,
         avg_coverage: row.try_get("avg_coverage").map_err(|e| e.to_string())?,
     })
+}
+
+// ============================================
+// History（执行 / 生成 / 覆盖率 三类运行历史）
+// ============================================
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionHistoryRow {
+    pub id: i64,
+    pub project_id: i64,
+    pub execution_type: String,
+    pub regression_suite_id: Option<i64>,
+    pub execution_status: String,
+    pub command: Option<String>,
+    pub total_tests: i64,
+    pub passed: i64,
+    pub failed: i64,
+    pub skipped: i64,
+    pub execution_time: f64,
+    pub executed_at: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerationHistoryRow {
+    pub id: i64,
+    pub project_id: i64,
+    pub generation_status: String,
+    pub total_files: i64,
+    pub generated_files: i64,
+    pub duration: f64,
+    pub command: Option<String>,
+    pub executed_at: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageHistoryRow {
+    pub id: i64,
+    pub project_id: i64,
+    pub coverage_status: String,
+    pub percent_covered: f64,
+    pub total_statements: i64,
+    pub covered_statements: i64,
+    pub duration: f64,
+    pub command: Option<String>,
+    pub executed_at: String,
+}
+
+/// 某项目的测试执行历史（最近 100 条）
+pub async fn list_execution_history(
+    app: &AppHandle,
+    project_id: i64,
+) -> Result<Vec<ExecutionHistoryRow>, String> {
+    let db = pool(app).await?;
+    let rows = sqlx::query(
+        "SELECT id, project_id, execution_type, regression_suite_id, execution_status, command,
+                total_tests, passed, failed, skipped, execution_time,
+                COALESCE(executed_at, '') AS executed_at
+         FROM test_execution_history
+         WHERE project_id = ?
+         ORDER BY id DESC LIMIT 100",
+    )
+    .bind(project_id)
+    .fetch_all(&db)
+    .await
+    .map_err(|e| format!("Failed to list execution history: {}", e))?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(ExecutionHistoryRow {
+                id: row.try_get("id").map_err(|e| e.to_string())?,
+                project_id: row.try_get("project_id").map_err(|e| e.to_string())?,
+                execution_type: row.try_get("execution_type").map_err(|e| e.to_string())?,
+                regression_suite_id: row
+                    .try_get("regression_suite_id")
+                    .map_err(|e| e.to_string())?,
+                execution_status: row.try_get("execution_status").map_err(|e| e.to_string())?,
+                command: row.try_get("command").map_err(|e| e.to_string())?,
+                total_tests: row.try_get("total_tests").map_err(|e| e.to_string())?,
+                passed: row.try_get("passed").map_err(|e| e.to_string())?,
+                failed: row.try_get("failed").map_err(|e| e.to_string())?,
+                skipped: row.try_get("skipped").map_err(|e| e.to_string())?,
+                execution_time: row.try_get("execution_time").map_err(|e| e.to_string())?,
+                executed_at: row.try_get("executed_at").map_err(|e| e.to_string())?,
+            })
+        })
+        .collect()
+}
+
+/// 写入一次测试生成历史（Pynguin），返回记录 id
+pub async fn save_generation_history(
+    app: &AppHandle,
+    project_id: i64,
+    generation_status: &str,
+    total_files: i64,
+    generated_files: i64,
+    duration: f64,
+    command: Option<String>,
+) -> Result<i64, String> {
+    let db = pool(app).await?;
+    let result = sqlx::query(
+        "INSERT INTO generation_history
+           (project_id, generation_status, total_files, generated_files, duration, command)
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(project_id)
+    .bind(generation_status)
+    .bind(total_files)
+    .bind(generated_files)
+    .bind(duration)
+    .bind(command)
+    .execute(&db)
+    .await
+    .map_err(|e| format!("Failed to save generation history: {}", e))?;
+
+    Ok(result.last_insert_rowid())
+}
+
+/// 某项目的测试生成历史（最近 100 条）
+pub async fn list_generation_history(
+    app: &AppHandle,
+    project_id: i64,
+) -> Result<Vec<GenerationHistoryRow>, String> {
+    let db = pool(app).await?;
+    let rows = sqlx::query(
+        "SELECT id, project_id, generation_status, total_files, generated_files, duration,
+                command, COALESCE(executed_at, '') AS executed_at
+         FROM generation_history
+         WHERE project_id = ?
+         ORDER BY id DESC LIMIT 100",
+    )
+    .bind(project_id)
+    .fetch_all(&db)
+    .await
+    .map_err(|e| format!("Failed to list generation history: {}", e))?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(GenerationHistoryRow {
+                id: row.try_get("id").map_err(|e| e.to_string())?,
+                project_id: row.try_get("project_id").map_err(|e| e.to_string())?,
+                generation_status: row.try_get("generation_status").map_err(|e| e.to_string())?,
+                total_files: row.try_get("total_files").map_err(|e| e.to_string())?,
+                generated_files: row.try_get("generated_files").map_err(|e| e.to_string())?,
+                duration: row.try_get("duration").map_err(|e| e.to_string())?,
+                command: row.try_get("command").map_err(|e| e.to_string())?,
+                executed_at: row.try_get("executed_at").map_err(|e| e.to_string())?,
+            })
+        })
+        .collect()
+}
+
+/// 写入一次覆盖率运行历史，返回记录 id
+pub async fn save_coverage_history(
+    app: &AppHandle,
+    project_id: i64,
+    coverage_status: &str,
+    percent_covered: f64,
+    total_statements: i64,
+    covered_statements: i64,
+    duration: f64,
+    command: Option<String>,
+) -> Result<i64, String> {
+    let db = pool(app).await?;
+    let result = sqlx::query(
+        "INSERT INTO coverage_history
+           (project_id, coverage_status, percent_covered, total_statements,
+            covered_statements, duration, command)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(project_id)
+    .bind(coverage_status)
+    .bind(percent_covered)
+    .bind(total_statements)
+    .bind(covered_statements)
+    .bind(duration)
+    .bind(command)
+    .execute(&db)
+    .await
+    .map_err(|e| format!("Failed to save coverage history: {}", e))?;
+
+    Ok(result.last_insert_rowid())
+}
+
+/// 某项目的覆盖率运行历史（最近 100 条）
+pub async fn list_coverage_history(
+    app: &AppHandle,
+    project_id: i64,
+) -> Result<Vec<CoverageHistoryRow>, String> {
+    let db = pool(app).await?;
+    let rows = sqlx::query(
+        "SELECT id, project_id, coverage_status, percent_covered, total_statements,
+                covered_statements, duration, command, COALESCE(executed_at, '') AS executed_at
+         FROM coverage_history
+         WHERE project_id = ?
+         ORDER BY id DESC LIMIT 100",
+    )
+    .bind(project_id)
+    .fetch_all(&db)
+    .await
+    .map_err(|e| format!("Failed to list coverage history: {}", e))?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(CoverageHistoryRow {
+                id: row.try_get("id").map_err(|e| e.to_string())?,
+                project_id: row.try_get("project_id").map_err(|e| e.to_string())?,
+                coverage_status: row.try_get("coverage_status").map_err(|e| e.to_string())?,
+                percent_covered: row.try_get("percent_covered").map_err(|e| e.to_string())?,
+                total_statements: row.try_get("total_statements").map_err(|e| e.to_string())?,
+                covered_statements: row
+                    .try_get("covered_statements")
+                    .map_err(|e| e.to_string())?,
+                duration: row.try_get("duration").map_err(|e| e.to_string())?,
+                command: row.try_get("command").map_err(|e| e.to_string())?,
+                executed_at: row.try_get("executed_at").map_err(|e| e.to_string())?,
+            })
+        })
+        .collect()
+}
+
+// ============================================
+// Tests（回归测试：COALESCE 回退分支的 REAL 列解码）
+// ============================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn mem_db() -> SqlitePool {
+        let db = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("failed to open in-memory sqlite");
+        sqlx::query(INIT_SQL)
+            .execute(&db)
+            .await
+            .expect("failed to init schema");
+        db
+    }
+
+    /// 回归测试：get_projects 的 coverage 列在无覆盖率数据时（COALESCE 回退 0）
+    /// 必须能按 f64 解码 —— 曾因 COALESCE(REAL, 0) 被 SQLite 声明为 INTEGER 而报错
+    /// "Rust type f64 ... not compatible with SQL type INTEGER"。
+    #[tokio::test]
+    async fn get_projects_coverage_decodes_as_real_with_no_data() {
+        let db = mem_db().await;
+        sqlx::query(
+            "INSERT INTO projects (name, project_path, interpreter_path, status) VALUES ('A', '/tmp/a', NULL, 'active')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        // 与 db::get_projects 完全相同的 SELECT（含 CAST AS REAL 修复）
+        let rows = sqlx::query(
+            "SELECT
+                p.id, p.name, p.project_path, p.interpreter_path, p.status,
+                COALESCE((SELECT SUM(passed) FROM test_execution_history t WHERE t.project_id = p.id), 0) AS tests_passed,
+                COALESCE((SELECT SUM(failed) FROM test_execution_history t WHERE t.project_id = p.id), 0) AS tests_failed,
+                (SELECT MAX(executed_at) FROM test_execution_history t WHERE t.project_id = p.id) AS last_run,
+                CAST(COALESCE((SELECT c.total_statement_coverage
+                           FROM coverage_results c
+                           WHERE c.project_id = p.id
+                           ORDER BY c.id DESC LIMIT 1), 0) AS REAL) AS coverage
+              FROM projects p
+              ORDER BY p.created_at DESC",
+        )
+        .fetch_all(&db)
+        .await
+        .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        let coverage: f64 = row.try_get("coverage").expect("coverage must decode as f64");
+        assert_eq!(coverage, 0.0);
+        let tests_passed: i64 = row.try_get("tests_passed").unwrap();
+        assert_eq!(tests_passed, 0);
+        let last_run: Option<String> = row.try_get("last_run").unwrap();
+        assert!(last_run.is_none());
+    }
+
+    /// get_projects 在有覆盖率记录时，coverage 列按 f64 返回真实百分比
+    #[tokio::test]
+    async fn get_projects_coverage_decodes_real_value() {
+        let db = mem_db().await;
+        sqlx::query(
+            "INSERT INTO projects (name, project_path, interpreter_path, status) VALUES ('A', '/tmp/a', NULL, 'active')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO coverage_results (project_id, execution_id, total_statement_coverage, total_branch_coverage, file_count, covered_file_count, detail_json_path)
+             VALUES (1, NULL, 87.5, 61.3, 4, 3, NULL)",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        let rows = sqlx::query(
+            "SELECT CAST(COALESCE((SELECT c.total_statement_coverage
+                       FROM coverage_results c
+                       WHERE c.project_id = p.id
+                       ORDER BY c.id DESC LIMIT 1), 0) AS REAL) AS coverage
+              FROM projects p",
+        )
+        .fetch_all(&db)
+        .await
+        .unwrap();
+
+        let coverage: f64 = rows[0].try_get("coverage").unwrap();
+        assert!((coverage - 87.5).abs() < 1e-9);
+    }
+
+    /// get_global_stats 在无任何数据时，avg_pass_rate / avg_coverage 必须按 f64 解码
+    #[tokio::test]
+    async fn global_stats_decodes_as_real_with_no_data() {
+        let db = mem_db().await;
+        let row = sqlx::query(
+            "SELECT
+                CAST(COALESCE((SELECT AVG(
+                  CASE WHEN (passed + failed + skipped) > 0
+                    THEN passed * 100.0 / (passed + failed + skipped)
+                    ELSE NULL END
+                ) FROM test_execution_history), 0) AS REAL) AS avg_pass_rate,
+                CAST(COALESCE((SELECT AVG(c.total_statement_coverage)
+                  FROM coverage_results c
+                  WHERE c.id IN (SELECT MAX(id) FROM coverage_results GROUP BY project_id)), 0) AS REAL) AS avg_coverage",
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+
+        let avg_pass_rate: f64 = row
+            .try_get("avg_pass_rate")
+            .expect("avg_pass_rate must decode as f64");
+        assert_eq!(avg_pass_rate, 0.0);
+        let avg_coverage: f64 = row
+            .try_get("avg_coverage")
+            .expect("avg_coverage must decode as f64");
+        assert_eq!(avg_coverage, 0.0);
+    }
 }

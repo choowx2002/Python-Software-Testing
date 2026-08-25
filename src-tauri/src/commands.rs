@@ -9,6 +9,7 @@ use tauri::Manager;
 // ============================================
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct EnvDetectionResult {
     pub python_path: Option<String>,
     pub python_version: Option<String>,
@@ -17,6 +18,24 @@ pub struct EnvDetectionResult {
     // 语义更准确：表示 Tauri 找到了可用的 venv 目录，可直接调用其 python，无需 shell activate
     pub venv_exists: bool,
     pub dependencies: Vec<DependencyStatus>,
+}
+
+/// 生成环境健康检查结果（Python / pynguin / bytecode 版本）
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerationEnvInfo {
+    pub python_version: String,
+    pub pynguin_version: Option<String>,
+    pub bytecode_version: Option<String>,
+}
+
+/// 一键修复环境时发出的阶段性进度事件（stage: winget / venv / deps / db / done）
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvFixStep {
+    pub stage: String,
+    pub status: String, // running | success | failed
+    pub message: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -33,10 +52,13 @@ struct PipPackage {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InstallResult {
     pub success: bool,
     pub installed: Vec<String>,
     pub failed: Vec<String>,
+    /// 每个失败包对应的 pip stderr 摘要（真实失败原因）
+    pub failed_reasons: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -79,6 +101,26 @@ pub mod db_commands;
 pub(crate) fn is_test_file(file_name: &str) -> bool {
     file_name.starts_with("test_") && file_name.ends_with(".py")
         || file_name.ends_with("_test.py")
+}
+
+/// 确保生成测试目录以 Python 包形式存在（写入 __init__.py）。
+/// Pynguin 输出为 tests/generated/<module>/test_<module>.py，若无 __init__.py，
+/// pytest 会按裸模块名导入，与手写 tests/test_cart.py 同名冲突
+/// （import file mismatch）。幂等，可随时调用。
+pub(crate) fn ensure_generated_test_packages(project: &Path) {
+    let base = project.join("tests").join("generated");
+    if !base.is_dir() {
+        return;
+    }
+    let _ = std::fs::write(base.join("__init__.py"), "");
+    if let Ok(entries) = std::fs::read_dir(&base) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let _ = std::fs::write(path.join("__init__.py"), "");
+            }
+        }
+    }
 }
 
 pub(crate) fn build_python_path(project: &Path) -> String {

@@ -1,9 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+/**
+ * Execute —— 测试执行页（彻底重构版）
+ * 设计：单一主流程
+ *   ① 运行条（一张卡片）：范围三段选择 + 目标选择 + Options 折叠 + Run/Stop
+ *   ② 运行监视器（一张卡片三态）：空闲引导 / 运行中终端日志+进度 / 完成结论+失败列表
+ *   ③ 已保存选择：底部折叠区
+ * 所有业务逻辑（事件监听 / 收集 / 执行 / 套件 / 持久化）保持不变。
+ */
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useRoute, useRouter } from "vue-router";
-import { ask } from "@tauri-apps/plugin-dialog";
 import {
   AlertCircle,
   Check,
@@ -13,13 +20,13 @@ import {
   Clock3,
   Copy,
   FileCode2,
+  Gauge,
   ListChecks,
   Play,
   RefreshCw,
   RotateCcw,
   Save,
   Search,
-  SlidersHorizontal,
   Square,
   Trash2,
   XCircle,
@@ -27,7 +34,10 @@ import {
 import { useProjectStore } from "../../../stores/projectStore";
 import { parseArguments } from "../../../helper/execute";
 import { useI18n } from "vue-i18n";
-
+import AppModal from "../../../components/ui/AppModal.vue";
+import AppButton from "../../../components/ui/AppButton.vue";
+import AppConfirmModal from "../../../components/ui/AppConfirmModal.vue";
+import StatusPill from "../../../components/ui/StatusPill.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -37,7 +47,7 @@ const { t } = useI18n();
 const projectId = computed(() => Number(route.params.id));
 
 type ExecutionStatus = "idle" | "running" | "completed" | "failed";
-type TestScope = "all" | "file" | "selected";
+type TestScope = "all" | "file" | "selected" | "suite";
 type ResultFilter = "all" | "passed" | "failed" | "skipped";
 
 interface TestFile {
@@ -145,10 +155,23 @@ const testResults = ref<TestResult[]>([]);
 
 const expandedFailures = ref<Set<string>>(new Set());
 
+/* 运行完成弹窗（手动运行后询问下一步：覆盖率 / 保存选择 / 稍后） */
+const showPostRunModal = ref(false);
+const postRunSummary = ref<{
+  passed: number;
+  failed: number;
+  skipped: number;
+  duration: number;
+} | null>(null);
+
+/* 终端日志容器（自动滚动到底部） */
+const logContainer = ref<HTMLElement | null>(null);
+
 let unlistenStarted: UnlistenFn | undefined;
 let unlistenOutput: UnlistenFn | undefined;
 let unlistenFinished: UnlistenFn | undefined;
 let logCounter = 0;
+
 /* -------------------------------------------------------------------------- */
 /* Presets                                                                    */
 /* -------------------------------------------------------------------------- */
@@ -195,6 +218,14 @@ const activeArguments = computed(() => {
 /* -------------------------------------------------------------------------- */
 /* Test selection                                                             */
 /* -------------------------------------------------------------------------- */
+
+/** 范围四段选择（紧凑分段控件） */
+const scopeOptions = computed(() => [
+  { id: "all" as TestScope, label: t("execute.scope.all") },
+  { id: "file" as TestScope, label: t("execute.scope.file") },
+  { id: "selected" as TestScope, label: t("execute.scope.selected") },
+  { id: "suite" as TestScope, label: t("execute.scope.suite") },
+]);
 
 const filteredTestCases = computed(() => {
   const query = testSearch.value.trim().toLowerCase();
@@ -246,6 +277,10 @@ const selectedScopeDescription = computed(() => {
     }
     case "selected":
       return t("execute.scopeDesc.selected", { count: selectedCount.value });
+    case "suite":
+      return t("execute.scopeDesc.suite", { count: suites.value.length });
+    default:
+      return "";
   }
 });
 
@@ -259,6 +294,8 @@ const executionTargets = computed<string[]>(() => {
 
     case "selected":
       return [...selectedTestCases.value];
+    default:
+      return [];
   }
 });
 
@@ -284,6 +321,11 @@ const canRun = computed(() => {
   }
 
   if (testScope.value === "selected" && selectedTestCases.value.length === 0) {
+    return false;
+  }
+
+  // suite 模式：在列表中直接点 Run，主按钮不可用
+  if (testScope.value === "suite") {
     return false;
   }
 
@@ -374,31 +416,17 @@ const statusText = computed(() => {
   }
 });
 
-const statusIcon = computed(() => {
+/** 页头 StatusPill 状态映射（视觉交给 StatusPill 组件） */
+const statusPillStatus = computed(() => {
   switch (executionStatus.value) {
     case "running":
-      return Clock3;
+      return "running";
     case "completed":
-      return failedTests.value > 0 ? XCircle : CheckCircle2;
+      return failedTests.value > 0 ? "Failed" : "completed";
     case "failed":
-      return XCircle;
+      return "Failed";
     default:
-      return AlertCircle;
-  }
-});
-
-const statusClass = computed(() => {
-  switch (executionStatus.value) {
-    case "running":
-      return "border-blue-200 bg-blue-50 text-blue-700";
-    case "completed":
-      return failedTests.value > 0
-        ? "border-rose-200 bg-rose-50 text-rose-700"
-        : "border-emerald-200 bg-emerald-50 text-emerald-700";
-    case "failed":
-      return "border-rose-200 bg-rose-50 text-rose-700";
-    default:
-      return "border-slate-200 bg-slate-50 text-slate-600";
+      return "idle";
   }
 });
 
@@ -415,6 +443,26 @@ const lastRunSummary = computed(() => {
 
   return `${totalResultCount.value} tests · ${executionDuration.value.toFixed(2)}s`;
 });
+
+/** 结果筛选（全部 / 通过 / 失败 / 跳过） */
+const resultFilters = computed(() => [
+  {
+    id: "all" as ResultFilter,
+    label: t("execute.results.filterAll", { count: testResults.value.length }),
+  },
+  {
+    id: "passed" as ResultFilter,
+    label: t("execute.results.filterPassed", { count: passedTests.value }),
+  },
+  {
+    id: "failed" as ResultFilter,
+    label: t("execute.results.filterFailed", { count: failedTests.value }),
+  },
+  {
+    id: "skipped" as ResultFilter,
+    label: t("execute.results.filterSkipped", { count: skippedTests.value }),
+  },
+]);
 
 /* -------------------------------------------------------------------------- */
 /* Event listeners                                                            */
@@ -495,25 +543,15 @@ async function setupTestListeners() {
 
       await saveExecutionToDb(event.payload);
 
-      // 有测试通过时，询问是否继续做覆盖率分析
-      if (event.payload.passed > 0) {
-        const runCoverageAnalysis = await ask(
-          t("execute.coveragePrompt"),
-          {
-            title: t("execute.coveragePromptTitle"),
-            kind: "info",
-            okLabel: t("execute.coverageYes"),
-            cancelLabel: t("execute.coverageNo"),
-          },
-        );
-
-        if (runCoverageAnalysis) {
-          router.push({
-            name: "ProjectCoverage",
-            params: { id: projectId.value },
-            query: { autoRun: "1" },
-          });
-        }
+      // 手动运行且有测试通过时：弹出下一步询问（覆盖率 / 保存选择 / 稍后）
+      if (event.payload.passed > 0 && event.payload.executionType !== "REGRESSION") {
+        postRunSummary.value = {
+          passed: event.payload.passed,
+          failed: event.payload.failed,
+          skipped: event.payload.skipped,
+          duration: event.payload.duration,
+        };
+        showPostRunModal.value = true;
       }
 
       if (!event.payload.success && event.payload.results.length === 0) {
@@ -682,23 +720,6 @@ function clearSelection() {
   selectedTestCases.value = [];
 }
 
-function toggleVisibleSelection() {
-  if (allVisibleSelected.value) {
-    const visibleIds = new Set(filteredTestCases.value.map((test) => test.id));
-
-    selectedTestCases.value = selectedTestCases.value.filter(
-      (id) => !visibleIds.has(id),
-    );
-  } else {
-    selectAllVisible();
-  }
-}
-
-// function selectFile(file: TestFile) {
-//   selectedTestFile.value = file.relativePath;
-//   testScope.value = "file";
-// }
-
 function getExpectedTestCount() {
   switch (testScope.value) {
     case "all":
@@ -827,9 +848,16 @@ async function loadSuites() {
   if (!currentProject.value?.id) return;
 
   try {
-    suites.value = await invoke<RegressionSuite[]>("list_regression_suites", {
+    const rows = await invoke<RegressionSuite[]>("list_regression_suites", {
       projectId: currentProject.value.id,
     });
+
+    // 兼容 target_paths 为 NULL 的历史数据（scope=all 保存或旧版本记录）
+    suites.value = (rows ?? []).map((suite) => ({
+      ...suite,
+      targetPaths: suite.targetPaths ?? [],
+      customParams: suite.customParams ?? null,
+    }));
   } catch (error) {
     console.error("[Execute] Failed to load regression suites:", error);
   }
@@ -881,13 +909,52 @@ async function runSuite(suite: RegressionSuite) {
   }
 }
 
-async function deleteSuite(suite: RegressionSuite) {
+/** 待删除套件（确认弹窗） */
+const deleteSuiteTarget = ref<RegressionSuite | null>(null);
+
+/**
+ * 套件目标摘要：
+ *  - target_paths 为空（"全部测试"范围保存）→ "All tests"
+ *  - 单个文件路径（不含 ::）→ 显示文件名
+ *  - 否则 → 数量（测试用例 id）
+ */
+function suiteTargetsLabel(suite: RegressionSuite) {
+  const paths = suite.targetPaths ?? [];
+  if (paths.length === 0) return t("execute.suiteScopeAll");
+  if (paths.length === 1 && !paths[0].includes("::")) {
+    return t("execute.suiteTargetsFile", { file: paths[0] });
+  }
+  return t("execute.suiteTargets", { count: paths.length });
+}
+
+async function confirmDeleteSuite() {
+  const suite = deleteSuiteTarget.value;
+  if (!suite) return;
+
   try {
     await invoke("delete_regression_suite", { suiteId: suite.id });
     await loadSuites();
   } catch (error) {
     console.error("[Execute] Failed to delete regression suite:", error);
+  } finally {
+    deleteSuiteTarget.value = null;
   }
+}
+
+/** 运行完成弹窗 → 保存当前选择 */
+function saveFromPostRun() {
+  showPostRunModal.value = false;
+  openSaveSuiteModal();
+}
+
+/** 运行完成弹窗 → 跳转覆盖率页（自动运行） */
+function runCoverageFromPostRun() {
+  showPostRunModal.value = false;
+  router.push({
+    name: "ProjectCoverage",
+    params: { id: projectId.value },
+    query: { autoRun: "1" },
+  });
 }
 
 /**
@@ -952,7 +1019,7 @@ function getResultClass(status: TestResult["status"]) {
       return "border-amber-200 bg-amber-50 text-amber-700";
 
     default:
-      return "border-slate-200 bg-slate-50 text-slate-600";
+      return "border-zinc-200 bg-zinc-50 text-zinc-600";
   }
 }
 
@@ -1055,6 +1122,15 @@ watch(
   },
 );
 
+/* 终端日志自动滚动到底部 */
+watch(
+  () => pytestOutput.value.length,
+  async () => {
+    await nextTick();
+    logContainer.value?.scrollTo({ top: logContainer.value.scrollHeight });
+  },
+);
+
 onMounted(() => {
   void setupTestListeners();
 });
@@ -1067,19 +1143,19 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex min-h-full flex-col gap-5 pb-8">
-    <!-- Header -->
+  <div class="flex min-h-full flex-col gap-4 p-5">
+    <!-- 页头 -->
     <header class="flex items-start justify-between gap-4">
       <div class="min-w-0">
         <div class="flex items-center gap-3">
-          <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+          <div
+            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-500"
+          >
             <Play class="h-4 w-4" />
           </div>
-
           <div class="min-w-0">
-            <h1 class="text-lg font-semibold text-slate-900">{{ t("execute.title") }}</h1>
-
-            <p class="mt-0.5 truncate text-xs text-slate-500">
+            <h1 class="text-lg font-semibold text-zinc-900">{{ t("execute.title") }}</h1>
+            <p class="mt-0.5 truncate text-xs text-zinc-500">
               {{
                 currentProject?.name
                   ? t("execute.subtitle", { name: currentProject.name })
@@ -1089,760 +1165,648 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
-
-      <div class="inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium"
-        :class="statusClass">
-        <component :is="statusIcon" class="h-3.5 w-3.5" :class="{ 'animate-spin': executionStatus === 'running' }" />
-
-        {{ statusText }}
-      </div>
+      <StatusPill :status="statusPillStatus" :label="statusText" :pulse="isRunning" />
     </header>
 
-    <!-- Select Tests -->
-    <section class="rounded-2xl border border-slate-200 bg-white">
-      <div class="flex items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
-        <div>
-          <div class="flex items-center gap-2">
-            <ListChecks class="h-4 w-4 text-slate-500" />
-
-            <h2 class="text-sm font-semibold text-slate-900">{{ t("execute.selectTests") }}</h2>
+    <!-- ══════════ 运行条（唯一主卡片） ══════════ -->
+    <section class="card">
+      <div class="px-5 py-4">
+        <!-- 头部：标题 + 刷新 -->
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 class="text-sm font-semibold text-zinc-900">{{ t("execute.selectTests") }}</h2>
+            <p class="mt-0.5 text-xs text-zinc-500">{{ t("execute.selectTestsDesc") }}</p>
           </div>
-
-          <p class="mt-1 text-xs text-slate-500">
-            {{ t("execute.selectTestsDesc") }}
-          </p>
+          <div class="flex items-center gap-2">
+            <span class="rounded-md bg-zinc-100 px-2 py-1 font-mono text-[10px] text-zinc-500">
+              {{ t("execute.results.testsTotal", { count: testCases.length }) }}
+            </span>
+            <AppButton
+              variant="secondary"
+              size="sm"
+              :loading="isCollecting || isLoadingTests"
+              :disabled="isRunning"
+              @click="refreshTests"
+            >
+              <RefreshCw class="h-3.5 w-3.5" />
+              {{ t("common.refresh") }}
+            </AppButton>
+          </div>
         </div>
 
-        <button type="button" :disabled="isCollecting || isLoadingTests || isRunning"
-          class="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-          @click="refreshTests">
-          <RefreshCw class="h-3.5 w-3.5" :class="{
-            'animate-spin': isCollecting || isLoadingTests,
-          }" />
-
-{{ isCollecting || isLoadingTests ? t("common.refreshing") : t("common.refresh") }}
-          </button>
-      </div>
-
-      <div class="p-5">
-        <!-- Scope -->
-        <div class="grid grid-cols-3 gap-2">
-          <button type="button" :disabled="isRunning"
-            class="rounded-xl border px-4 py-3 text-left transition disabled:cursor-not-allowed" :class="testScope === 'all'
-              ? 'border-emerald-300 bg-emerald-50'
-              : 'border-slate-200 hover:bg-slate-50'
-              " @click="setScope('all')">
-            <div class="text-sm font-medium text-slate-900">{{ t("execute.scope.all") }}</div>
-
-            <div class="mt-1 text-xs text-slate-500">
-              {{ t("execute.scope.allDesc") }}
-            </div>
-          </button>
-
-          <button type="button" :disabled="isRunning"
-            class="rounded-xl border px-4 py-3 text-left transition disabled:cursor-not-allowed" :class="testScope === 'file'
-              ? 'border-emerald-300 bg-emerald-50'
-              : 'border-slate-200 hover:bg-slate-50'
-              " @click="setScope('file')">
-            <div class="text-sm font-medium text-slate-900">{{ t("execute.scope.file") }}</div>
-
-            <div class="mt-1 text-xs text-slate-500">
-              {{ t("execute.scope.fileDesc") }}
-            </div>
-          </button>
-
-          <button type="button" :disabled="isRunning"
-            class="rounded-xl border px-4 py-3 text-left transition disabled:cursor-not-allowed" :class="testScope === 'selected'
-              ? 'border-emerald-300 bg-emerald-50'
-              : 'border-slate-200 hover:bg-slate-50'
-              " @click="setScope('selected')">
-            <div class="text-sm font-medium text-slate-900">{{ t("execute.scope.selected") }}</div>
-
-            <div class="mt-1 text-xs text-slate-500">
-              {{ t("execute.scope.selectedDesc") }}
-            </div>
+        <!-- 范围：紧凑分段选择 -->
+        <div class="mt-4 inline-flex rounded-lg border border-border bg-zinc-50 p-0.5">
+          <button
+            v-for="opt in scopeOptions"
+            :key="opt.id"
+            type="button"
+            :disabled="isRunning"
+            class="rounded-md px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed"
+            :class="
+              testScope === opt.id
+                ? 'bg-white text-zinc-900 shadow-sm'
+                : 'text-zinc-500 hover:text-zinc-800'
+            "
+            @click="setScope(opt.id)"
+          >
+            {{ opt.label }}
           </button>
         </div>
 
-        <!-- File selection -->
-        <div v-if="testScope === 'file'" class="mt-4">
-          <label class="mb-2 block text-xs font-medium text-slate-700">
-            {{ t("execute.fileSelection") }}
-          </label>
-
-          <select v-model="selectedTestFile" :disabled="isRunning || testFiles.length === 0"
-            class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-50 disabled:text-slate-400">
+        <!-- 目标选择：文件下拉 -->
+        <div v-if="testScope === 'file'" class="mt-3">
+          <select
+            v-model="selectedTestFile"
+            :disabled="isRunning || testFiles.length === 0"
+            class="input"
+          >
             <option value="" disabled>{{ t("execute.chooseFile") }}</option>
-
-            <option v-for="file in testFiles" :key="file.relativePath" :value="file.relativePath">
+            <option
+              v-for="file in testFiles"
+              :key="file.relativePath"
+              :value="file.relativePath"
+            >
               {{ file.relativePath }}
             </option>
           </select>
         </div>
 
-        <!-- Test list -->
-        <div class="mt-5 rounded-xl border border-slate-200">
-          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-            <div class="flex min-w-0 items-center gap-3">
-              <div class="relative">
-                <Search
-                  class="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
-
-                <input v-model="testSearch" type="text" :placeholder="t('execute.searchPlaceholder')" :disabled="isRunning"
-                  class="w-64 rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-xs text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-50" />
-              </div>
-
-              <span class="text-xs text-slate-500">
-                {{ t("execute.results.testsTotal", { count: testCases.length }) }}
-              </span>
+        <!-- 目标选择：测试用例列表（搜索 + 多选） -->
+        <div v-if="testScope === 'selected'" class="mt-3 rounded-lg border border-border">
+          <div class="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
+            <div class="relative min-w-0 flex-1">
+              <Search
+                class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400"
+              />
+              <input
+                v-model="testSearch"
+                type="text"
+                :placeholder="t('execute.searchPlaceholder')"
+                :disabled="isRunning"
+                class="input h-8 pl-8 pr-3"
+              />
             </div>
-
-            <div class="flex items-center gap-2">
-              <button type="button" :disabled="isRunning ||
-                filteredTestCases.length === 0 ||
-                allVisibleSelected
-                "
-                class="rounded-lg px-2.5 py-2 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
-                @click="selectAllVisible">
+            <div class="flex shrink-0 items-center gap-1">
+              <AppButton
+                variant="ghost"
+                size="sm"
+                :disabled="isRunning || filteredTestCases.length === 0 || allVisibleSelected"
+                @click="selectAllVisible"
+              >
                 {{ t("common.selectAll") }}
-              </button>
-
-              <button type="button" :disabled="isRunning || selectedTestCases.length === 0"
-                class="rounded-lg px-2.5 py-2 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
-                @click="clearSelection">
+              </AppButton>
+              <AppButton
+                variant="ghost"
+                size="sm"
+                :disabled="isRunning || selectedTestCases.length === 0"
+                @click="clearSelection"
+              >
                 {{ t("common.clear") }}
-              </button>
+              </AppButton>
             </div>
           </div>
 
-          <div class="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-4 py-2.5">
-            <div class="flex items-center gap-2">
-              <button type="button" :disabled="isRunning || filteredTestCases.length === 0"
-                class="flex h-4 w-4 items-center justify-center rounded border transition disabled:cursor-not-allowed"
-                :class="allVisibleSelected
-                  ? 'border-emerald-500 bg-emerald-500 text-white'
-                  : 'border-slate-300 bg-white'
-                  " @click="toggleVisibleSelection">
-                <Check v-if="allVisibleSelected" class="h-3 w-3" />
-              </button>
-
-              <span class="text-xs font-medium text-slate-600">
-                {{ t("execute.selectedCount", { count: selectedCount }) }}
-              </span>
+          <div class="max-h-56 overflow-auto">
+            <div v-if="isCollecting" class="px-4 py-8 text-center text-sm text-zinc-500">
+              {{ t("execute.collecting") }}
             </div>
-
-            <span class="text-xs text-slate-500">
-              {{ selectedScopeDescription }}
-            </span>
-          </div>
-
-          <div v-if="isCollecting" class="px-5 py-10 text-center text-sm text-slate-500">
-            {{ t("execute.collecting") }}
-          </div>
-
-          <div v-else-if="collectError"
-            class="m-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-            {{ collectError }}
-          </div>
-
-          <div v-else-if="testCases.length === 0" class="px-5 py-10 text-center">
-            <div class="text-sm font-medium text-slate-700">
-              {{ t("execute.noTestCases") }}
+            <div
+              v-else-if="collectError"
+              class="m-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700"
+            >
+              {{ collectError }}
             </div>
-
-            <div class="mt-1 text-xs text-slate-500">
-              {{ t("execute.noTestCasesDesc") }}
+            <div v-else-if="testCases.length === 0" class="px-4 py-8 text-center">
+              <div class="text-sm font-medium text-zinc-700">{{ t("execute.noTestCases") }}</div>
+              <div class="mt-1 text-xs text-zinc-500">{{ t("execute.noTestCasesDesc") }}</div>
             </div>
-          </div>
-
-          <div v-else-if="filteredTestCases.length === 0" class="px-5 py-10 text-center text-sm text-slate-500">
-            {{ t("execute.noSearchResults") }}
-          </div>
-
-          <div v-else class="max-h-80 overflow-auto">
-            <button v-for="test in filteredTestCases" :key="test.id" type="button" :disabled="isRunning"
-              class="flex w-full items-center gap-3 border-b border-slate-100 px-4 py-3 text-left transition last:border-b-0 hover:bg-slate-50 disabled:cursor-not-allowed"
-              @click="toggleTest(test.id)">
-              <span class="flex h-4 w-4 shrink-0 items-center justify-center rounded border transition" :class="isTestSelected(test.id)
-                ? 'border-emerald-500 bg-emerald-500 text-white'
-                : 'border-slate-300 bg-white'
-                ">
+            <div v-else-if="filteredTestCases.length === 0" class="px-4 py-8 text-center text-sm text-zinc-500">
+              {{ t("execute.noSearchResults") }}
+            </div>
+            <button
+              v-for="test in filteredTestCases"
+              :key="test.id"
+              type="button"
+              :disabled="isRunning"
+              class="flex w-full items-center gap-3 border-b border-border px-3 py-2 text-left transition last:border-b-0 hover:bg-zinc-50 disabled:cursor-not-allowed"
+              @click="toggleTest(test.id)"
+            >
+              <span
+                class="flex h-4 w-4 shrink-0 items-center justify-center rounded border transition"
+                :class="
+                  isTestSelected(test.id)
+                    ? 'border-brand-500 bg-brand-500 text-white'
+                    : 'border-zinc-300 bg-white'
+                "
+              >
                 <Check v-if="isTestSelected(test.id)" class="h-3 w-3" />
               </span>
-
-              <FileCode2 class="h-4 w-4 shrink-0 text-slate-400" />
-
+              <FileCode2 class="h-4 w-4 shrink-0 text-zinc-400" />
               <span class="min-w-0 flex-1">
-                <span class="block truncate text-sm font-medium text-slate-800">
+                <span class="block truncate text-[13px] font-medium text-zinc-800">
                   {{ test.name }}
                 </span>
-
-                <span class="mt-0.5 block truncate font-mono text-[11px] text-slate-500">
+                <span class="mt-0.5 block truncate font-mono text-[10px] text-zinc-500">
                   {{ test.file }}
-                  <template v-if="test.className">
-                    ::{{ test.className }}
-                  </template>
+                  <template v-if="test.className">::{{ test.className }}</template>
                 </span>
               </span>
             </button>
           </div>
         </div>
 
-        <div v-if="testScanError"
-          class="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
+        <!-- 目标选择：已保存选择列表 -->
+        <div v-if="testScope === 'suite'" class="mt-3 rounded-lg border border-border">
+          <div v-if="suites.length === 0" class="px-4 py-6 text-center">
+            <div class="text-sm font-medium text-zinc-700">{{ t("execute.noSuites") }}</div>
+            <div class="mt-1 text-xs text-zinc-500">{{ t("execute.regressionSuitesDesc") }}</div>
+          </div>
+          <div v-else class="divide-y divide-border">
+            <div
+              v-for="suite in suites"
+              :key="suite.id"
+              class="flex items-center justify-between gap-3 px-3.5 py-2.5"
+            >
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="truncate text-[13px] font-medium text-zinc-800">
+                    {{ suite.suiteName }}
+                  </span>
+                  <!-- 已保存的实际参数（Q4：配置可见） -->
+                  <span
+                    v-if="suite.customParams && suite.customParams.length > 0"
+                    class="hidden truncate rounded-full bg-zinc-100 px-2 py-0.5 font-mono text-[10px] text-zinc-500 sm:inline"
+                  >
+                    {{ suite.customParams.join(" ") }}
+                  </span>
+                </div>
+                <div class="mt-0.5 truncate text-xs text-zinc-500">
+                  {{ suiteTargetsLabel(suite) }}
+                  · {{ suite.createdAt }}
+                </div>
+              </div>
+              <div class="flex shrink-0 items-center gap-2">
+                <AppButton
+                  variant="secondary"
+                  size="sm"
+                  :disabled="isRunning || isRunningSuite"
+                  @click="runSuite(suite)"
+                >
+                  <Play class="h-3.5 w-3.5" />
+                  {{ t("common.run") }}
+                </AppButton>
+                <button
+                  type="button"
+                  :disabled="isRunning || isRunningSuite"
+                  class="btn btn-danger btn-sm"
+                  :title="t('execute.deleteSuiteTitle')"
+                  @click="deleteSuiteTarget = suite"
+                >
+                  <Trash2 class="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div
+          v-if="testScanError"
+          class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-700"
+        >
           {{ testScanError }}
         </div>
-      </div>
-    </section>
 
-    <!-- Run Configuration -->
-    <section class="rounded-2xl border border-slate-200 bg-white">
-      <div class="border-b border-slate-200 px-5 py-4">
-        <div class="flex items-center gap-2">
-          <SlidersHorizontal class="h-4 w-4 text-slate-500" />
-
-          <h2 class="text-sm font-semibold text-slate-900">
-            {{ t("execute.runConfiguration") }}
-          </h2>
-        </div>
-
-        <p class="mt-1 text-xs text-slate-500">
-          {{ t("execute.runConfigurationDesc") }}
-        </p>
-      </div>
-
-      <div class="p-5">
-        <div class="grid grid-cols-2 gap-3">
-          <button v-for="preset in presets" :key="preset.id" type="button" :disabled="isRunning"
-            class="rounded-xl border p-4 text-left transition disabled:cursor-not-allowed" :class="selectedPreset === preset.id && !customArguments.trim()
-              ? 'border-emerald-300 bg-emerald-50'
-              : 'border-slate-200 hover:bg-slate-50'
-              " @click="
-                selectedPreset = preset.id;
-              customArguments = '';
-              ">
-            <div class="flex items-center justify-between gap-3">
-              <span class="text-sm font-medium text-slate-900">
-                {{ preset.name }}
-              </span>
-
-              <span v-if="selectedPreset === preset.id && !customArguments.trim()"
-                class="text-xs font-medium text-emerald-600">
-                {{ t("execute.selectedBadge") }}
-              </span>
-            </div>
-
-            <div class="mt-1 text-xs leading-5 text-slate-500">
-              {{ preset.description }}
-            </div>
-
-            <div class="mt-2 font-mono text-[11px] text-slate-400">
-              {{ preset.args.join(" ") }}
-            </div>
-          </button>
-        </div>
-
-        <div class="mt-4 border-t border-slate-100 pt-4">
-          <button type="button"
-            class="flex items-center gap-2 text-xs font-medium text-slate-600 transition hover:text-slate-900"
-            @click="showAdvanced = !showAdvanced">
-            <ChevronDown v-if="showAdvanced" class="h-4 w-4" />
-
-            <ChevronRight v-else class="h-4 w-4" />
-
-            {{ t("execute.advancedOptions") }}
-          </button>
-
-          <div v-if="showAdvanced" class="mt-4">
-            <label class="mb-1.5 block text-xs font-medium text-slate-700">
-              {{ t("execute.customArgs") }}
-            </label>
-
-            <input v-model="customArguments" :disabled="isRunning" type="text"
-              :placeholder="t('execute.argsPlaceholder')"
-              class="w-full rounded-xl border border-slate-200 px-3 py-2.5 font-mono text-xs text-slate-700 outline-none transition placeholder:font-sans placeholder:text-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-50" />
-
-            <p class="mt-1.5 text-[11px] text-slate-400">
-              {{ t("execute.customArgsDesc") }}
-            </p>
-          </div>
-        </div>
-
-        <div class="mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
-          <div>
-            <div class="text-xs font-medium text-slate-700">
-              {{ selectedScopeDescription }}
-            </div>
-
-            <div class="mt-1 text-[11px] text-slate-400">
-              {{ t("execute.argumentsLine") }}
-              <span class="font-mono">
-                {{ activeArguments.join(" ") }}
-              </span>
+        <!-- 底部：范围摘要 + 参数预览 + 主操作 -->
+        <div class="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+          <div class="min-w-0">
+            <div class="text-xs font-medium text-zinc-700">{{ selectedScopeDescription }}</div>
+            <div class="mt-0.5 truncate font-mono text-[10px] text-zinc-400">
+              {{ t("execute.argumentsLine") }} {{ activeArguments.join(" ") }}
             </div>
           </div>
-
-          <div class="flex items-center gap-2">
-            <button v-if="isRunning" type="button"
-              class="inline-flex items-center gap-2 rounded-xl bg-rose-500 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-rose-600"
-              @click="stopTests">
+          <div v-if="testScope !== 'suite'" class="flex shrink-0 items-center gap-2">
+            <AppButton v-if="isRunning" variant="danger" @click="stopTests">
               <Square class="h-4 w-4" />
               {{ t("common.stop") }}
-            </button>
-
+            </AppButton>
             <template v-else>
-              <button type="button" :disabled="!canRun"
-                class="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                title="Save the current test selection and arguments as a reusable regression suite"
-                @click="openSaveSuiteModal">
+              <AppButton
+                variant="secondary"
+                :disabled="!canRun"
+                :title="t('execute.saveAsSuite')"
+                @click="openSaveSuiteModal"
+              >
                 <Save class="h-4 w-4" />
                 {{ t("execute.saveAsSuite") }}
-              </button>
-
-              <button type="button" :disabled="!canRun"
-                class="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
-                @click="runTests">
+              </AppButton>
+              <AppButton variant="primary" :disabled="!canRun" @click="runTests">
                 <Play class="h-4 w-4" />
                 {{ t("execute.runTests") }}
-              </button>
+              </AppButton>
             </template>
           </div>
         </div>
       </div>
-    </section>
 
-    <!-- Regression Suites -->
-    <section class="rounded-2xl border border-slate-200 bg-white">
-      <div class="flex items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
-        <div>
-          <div class="text-sm font-semibold text-slate-900">{{ t("execute.regressionSuites") }}</div>
+      <!-- Options 折叠：预设 + 自定义参数 -->
+      <div class="border-t border-border px-5 py-3">
+        <button
+          type="button"
+          class="flex items-center gap-2 text-xs font-medium text-zinc-600 transition hover:text-zinc-900"
+          @click="showAdvanced = !showAdvanced"
+        >
+          <ChevronDown v-if="showAdvanced" class="h-4 w-4" />
+          <ChevronRight v-else class="h-4 w-4" />
+          {{ t("execute.runConfiguration") }}
+        </button>
 
-          <div class="mt-1 text-xs text-slate-500">
-            {{ t("execute.regressionSuitesDesc") }}
+        <div v-if="showAdvanced" class="mt-3">
+          <div class="grid grid-cols-2 gap-2">
+            <button
+              v-for="preset in presets"
+              :key="preset.id"
+              type="button"
+              :disabled="isRunning"
+              class="rounded-lg border px-3.5 py-2.5 text-left transition disabled:cursor-not-allowed"
+              :class="
+                selectedPreset === preset.id && !customArguments.trim()
+                  ? 'border-brand-200 bg-brand-50'
+                  : 'border-border hover:bg-zinc-50'
+              "
+              @click="
+                selectedPreset = preset.id;
+                customArguments = '';
+              "
+            >
+              <div class="text-[13px] font-medium text-zinc-900">{{ preset.name }}</div>
+              <div class="mt-0.5 text-[11px] leading-4 text-zinc-500">{{ preset.description }}</div>
+              <div class="mt-1 font-mono text-[10px] text-zinc-400">{{ preset.args.join(" ") }}</div>
+            </button>
           </div>
-        </div>
 
-        <div class="text-xs font-medium text-emerald-600">
-          {{ t("execute.suiteCount", { count: suites.length }) }}
-        </div>
-      </div>
-
-      <div class="p-5">
-        <div v-if="suites.length === 0" class="text-center text-sm text-slate-500 py-6">
-          {{ t("execute.noSuites") }}
-        </div>
-
-        <div v-else class="flex flex-col gap-2">
-          <div v-for="suite in suites" :key="suite.id"
-            class="flex items-center justify-between gap-4 rounded-xl border border-slate-100 px-4 py-3 transition hover:border-emerald-200">
-            <div class="min-w-0">
-              <div class="flex items-center gap-2">
-                <span class="text-sm font-medium text-slate-800">
-                  {{ suite.suiteName }}
-                </span>
-
-                <span v-if="suite.customParams && suite.customParams.length > 0"
-                  class="hidden rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500 lg:inline">
-                  {{ suite.customParams.join(" ") }}
-                </span>
-              </div>
-
-              <div class="mt-0.5 truncate text-xs text-slate-500">
-                {{ t("execute.suiteTargets", { count: suite.targetPaths.length }) }}
-                · {{ suite.createdAt }}
-              </div>
-            </div>
-
-            <div class="flex shrink-0 items-center gap-2">
-              <button type="button" :disabled="isRunning || isRunningSuite"
-                class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
-                @click="runSuite(suite)">
-                <Play class="h-3.5 w-3.5" />
-                {{ t("common.run") }}
-              </button>
-
-              <button type="button" :disabled="isRunning || isRunningSuite"
-                class="inline-flex items-center rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 transition hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
-                :title="t('execute.deleteSuiteTitle')"
-                @click="deleteSuite(suite)">
-                <Trash2 class="h-3.5 w-3.5" />
-              </button>
-            </div>
+          <div class="mt-3 border-t border-border pt-3">
+            <label class="label" for="custom-args">{{ t("execute.customArgs") }}</label>
+            <input
+              id="custom-args"
+              v-model="customArguments"
+              :disabled="isRunning"
+              type="text"
+              :placeholder="t('execute.argsPlaceholder')"
+              class="input mt-1.5 font-mono"
+            />
+            <p class="mt-1 text-[11px] text-zinc-400">{{ t("execute.customArgsDesc") }}</p>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- Execution -->
-    <section class="rounded-2xl border border-slate-200 bg-white">
-      <div class="flex items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
-        <div>
-          <div class="text-sm font-semibold text-slate-900">{{ t("execute.execution.title") }}</div>
-
-          <div class="mt-1 text-xs text-slate-500">
-            {{ t("execute.execution.desc") }}
-          </div>
+    <!-- ══════════ 运行监视器（空闲 / 运行中 / 完成 三态） ══════════ -->
+    <section class="card">
+      <!-- 空闲：教你下一步 -->
+      <div
+        v-if="!hasResult && !isRunning"
+        class="flex min-h-64 flex-col items-center justify-center px-6 py-12 text-center"
+      >
+        <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-zinc-100 text-zinc-400">
+          <ListChecks class="h-6 w-6" />
         </div>
-
-        <div v-if="isRunning" class="text-xs font-medium text-blue-600">
-          {{ completedTests }} / {{ totalTests }}
-        </div>
+        <h3 class="mt-4 text-sm font-semibold text-zinc-900">
+          {{ t("execute.execution.readyToRun") }}
+        </h3>
+        <p class="mt-1 max-w-sm text-xs leading-5 text-zinc-500">
+          {{ t("execute.execution.desc") }} {{ selectedScopeDescription }}
+        </p>
       </div>
 
-      <div class="p-5">
-        <div v-if="executionStatus === 'idle'"
-          class="rounded-xl border border-dashed border-slate-200 px-5 py-10 text-center">
-          <div class="text-sm font-medium text-slate-700">{{ t("execute.execution.readyToRun") }}</div>
-
-          <div class="mt-1 text-xs text-slate-500">
-            {{ selectedScopeDescription }}
-          </div>
-        </div>
-
-        <div v-else>
+      <template v-else>
+        <!-- 进度区 -->
+        <div class="border-b border-border px-5 py-4">
           <div class="flex items-end justify-between gap-4">
-            <div>
-              <div class="text-sm font-semibold text-slate-900">
+            <div class="min-w-0">
+              <div class="text-sm font-semibold text-zinc-900">
+                {{ isRunning ? t("execute.execution.running") : t("execute.execution.completed") }}
+              </div>
+              <div class="mt-0.5 text-xs text-zinc-500">
                 {{
-                  executionStatus === "running"
-                    ? t("execute.execution.running")
-                    : t("execute.execution.completed")
+                  isRunning
+                    ? t("execute.execution.processed", {
+                        completed: completedTests,
+                        total: totalTests,
+                      })
+                    : lastRunSummary
                 }}
               </div>
-
-              <div class="mt-1 text-xs text-slate-500">
-                {{ t("execute.execution.processed", { completed: completedTests, total: totalTests }) }}
-              </div>
             </div>
-
-            <div class="text-2xl font-semibold text-slate-900">
-              {{ progress }}%
-            </div>
+            <div class="text-2xl font-semibold text-zinc-900">{{ progress }}%</div>
           </div>
 
-          <div class="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
-            <div class="h-full rounded-full transition-all duration-300" :class="executionStatus === 'failed' ? 'bg-rose-500' : 'bg-emerald-500'
-              " :style="{ width: `${progress}%` }" />
+          <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-zinc-100">
+            <div
+              class="h-full rounded-full transition-all duration-300"
+              :class="executionStatus === 'failed' ? 'bg-rose-500' : 'bg-emerald-500'"
+              :style="{ width: `${progress}%` }"
+            />
           </div>
 
-          <div class="mt-5 grid grid-cols-3 gap-3">
-            <div class="rounded-xl border border-emerald-100 bg-emerald-50 p-4">
-              <div class="text-xs text-emerald-700">{{ t("execute.results.passed") }}</div>
+          <div
+            v-if="isRunning && currentTest"
+            class="mt-3 flex items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2"
+          >
+            <Clock3 class="h-3.5 w-3.5 shrink-0 text-sky-600" />
+            <span class="truncate font-mono text-[11px] text-sky-800">{{ currentTest }}</span>
+          </div>
+        </div>
 
-              <div class="mt-1 text-xl font-semibold text-emerald-700">
-                {{ passedTests }}
-              </div>
-            </div>
-
-            <div class="rounded-xl border border-rose-100 bg-rose-50 p-4">
-              <div class="text-xs text-rose-700">{{ t("execute.results.failed") }}</div>
-
-              <div class="mt-1 text-xl font-semibold text-rose-700">
-                {{ failedTests }}
-              </div>
-            </div>
-
-            <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <div class="text-xs text-slate-600">{{ t("execute.results.skipped") }}</div>
-
-              <div class="mt-1 text-xl font-semibold text-slate-700">
-                {{ skippedTests }}
-              </div>
+        <!-- 终端日志（运行中自动显示，自动滚动） -->
+        <div v-if="isRunning || pytestOutput.length > 0">
+          <div class="flex items-center justify-between gap-3 bg-zinc-950 px-4 py-2">
+            <span class="truncate font-mono text-[10px] text-zinc-400">
+              {{ t("execute.output.title") }} ·
+              {{ t("execute.output.logLines", { count: pytestOutput.length }) }}
+            </span>
+            <div class="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
+                @click="copyLogs"
+              >
+                <Copy class="h-3 w-3" />
+                {{ t("common.copy") }}
+              </button>
+              <button
+                type="button"
+                class="rounded-md px-2 py-1 text-[11px] font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
+                @click="clearOutput"
+              >
+                {{ t("common.clear") }}
+              </button>
             </div>
           </div>
+          <pre
+            ref="logContainer"
+            class="max-h-64 overflow-auto bg-zinc-950 px-4 py-3 font-mono text-[11px] leading-5"
+          >
+            <template v-for="output in pytestOutput" :key="output.logId">
+              <span :class="output.stream === 'stderr' ? 'text-rose-300' : 'text-zinc-300'">{{
+                output.line
+              }}</span>{{ "\n" }}
+            </template>
+          </pre>
+        </div>
 
-          <div v-if="isRunning && currentTest" class="mt-5 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
-            <div class="text-[10px] font-semibold uppercase tracking-wide text-blue-500">
-              {{ t("execute.execution.currentTest") }}
+        <!-- 完成：结论横幅 + 统计 + 结果列表 -->
+        <div v-if="hasResult" class="px-5 py-4">
+          <div
+            class="flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3.5"
+            :class="
+              failedTests > 0 || executionStatus === 'failed'
+                ? 'border-rose-200 bg-rose-50'
+                : 'border-emerald-200 bg-emerald-50'
+            "
+          >
+            <div class="flex min-w-0 items-start gap-3">
+              <CheckCircle2
+                v-if="executionStatus === 'completed' && failedTests === 0"
+                class="mt-0.5 h-5 w-5 shrink-0 text-emerald-600"
+              />
+              <XCircle v-else class="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
+              <div class="min-w-0">
+                <div
+                  class="text-sm font-semibold"
+                  :class="
+                    failedTests > 0 || executionStatus === 'failed'
+                      ? 'text-rose-800'
+                      : 'text-emerald-800'
+                  "
+                >
+                  {{ resultConclusion.title }}
+                </div>
+                <div
+                  class="mt-0.5 text-xs"
+                  :class="
+                    failedTests > 0 || executionStatus === 'failed'
+                      ? 'text-rose-700'
+                      : 'text-emerald-700'
+                  "
+                >
+                  {{ resultConclusion.description }}
+                </div>
+              </div>
             </div>
-
-            <div class="mt-1 truncate font-mono text-xs text-blue-800">
-              {{ currentTest }}
-            </div>
+            <AppButton
+              v-if="failedResults.length > 0"
+              variant="secondary"
+              size="sm"
+              :disabled="isRunning"
+              @click="rerunFailedTests"
+            >
+              <RotateCcw class="h-3.5 w-3.5" />
+              {{ t("execute.rerunFailed") }}
+            </AppButton>
           </div>
 
-          <div v-if="!isRunning" class="mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
-            <span class="text-xs text-slate-500">
-              {{ t("execute.results.duration") }}:
-              <span class="font-medium text-slate-700">
+          <!-- 统计条 -->
+          <div class="mt-4 grid grid-cols-4 gap-3">
+            <div class="rounded-lg border border-border p-3">
+              <div class="text-[10px] text-zinc-500">{{ t("execute.results.total") }}</div>
+              <div class="mt-0.5 text-xl font-semibold text-zinc-900">{{ totalResultCount }}</div>
+            </div>
+            <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+              <div class="text-[10px] text-emerald-700">{{ t("execute.results.passed") }}</div>
+              <div class="mt-0.5 text-xl font-semibold text-emerald-700">{{ passedTests }}</div>
+            </div>
+            <div class="rounded-lg border border-rose-200 bg-rose-50 p-3">
+              <div class="text-[10px] text-rose-700">{{ t("execute.results.failed") }}</div>
+              <div class="mt-0.5 text-xl font-semibold text-rose-700">{{ failedTests }}</div>
+            </div>
+            <div class="rounded-lg border border-border bg-zinc-50 p-3">
+              <div class="text-[10px] text-zinc-500">{{ t("execute.results.duration") }}</div>
+              <div class="mt-0.5 text-xl font-semibold text-zinc-700">
                 {{ executionDuration.toFixed(2) }}s
-              </span>
-            </span>
-
-            <span class="text-xs text-slate-400">
-              {{ lastRunSummary }}
-            </span>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Result -->
-    <section v-if="hasResult" class="rounded-2xl border border-slate-200 bg-white">
-      <div class="border-b border-slate-200 px-5 py-4">
-        <div class="flex items-center justify-between gap-4">
-          <div>
-            <div class="text-sm font-semibold text-slate-900">{{ t("execute.results.title") }}</div>
-
-            <div class="mt-1 text-xs text-slate-500">
-              {{ t("execute.results.desc") }}
-            </div>
-          </div>
-
-          <button v-if="failedResults.length > 0" type="button" :disabled="isRunning"
-            class="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-            @click="rerunFailedTests">
-            <RotateCcw class="h-3.5 w-3.5" />
-            {{ t("execute.rerunFailed") }}
-          </button>
-        </div>
-      </div>
-
-      <div class="p-5">
-        <!-- Conclusion -->
-        <div class="rounded-2xl border p-5" :class="failedTests > 0 || executionStatus === 'failed'
-          ? 'border-rose-200 bg-rose-50'
-          : 'border-emerald-200 bg-emerald-50'
-          ">
-          <div class="flex items-start gap-3">
-            <CheckCircle2 v-if="executionStatus === 'completed' && failedTests === 0"
-              class="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
-
-            <XCircle v-else class="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
-
-            <div>
-              <div class="text-sm font-semibold" :class="failedTests > 0 || executionStatus === 'failed'
-                ? 'text-rose-800'
-                : 'text-emerald-800'
-                ">
-                {{ resultConclusion.title }}
-              </div>
-
-              <div class="mt-1 text-xs" :class="failedTests > 0 || executionStatus === 'failed'
-                ? 'text-rose-700'
-                : 'text-emerald-700'
-                ">
-                {{ resultConclusion.description }}
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- Summary -->
-        <div class="mt-5 grid grid-cols-4 gap-3">
-          <div class="rounded-xl border border-slate-200 p-4">
-            <div class="text-xs text-slate-500">{{ t("execute.results.total") }}</div>
-
-            <div class="mt-1 text-xl font-semibold text-slate-900">
-              {{ totalResultCount }}
-            </div>
-          </div>
-
-          <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-            <div class="text-xs text-emerald-700">{{ t("execute.results.passed") }}</div>
-
-            <div class="mt-1 text-xl font-semibold text-emerald-700">
-              {{ passedTests }}
-            </div>
-          </div>
-
-          <div class="rounded-xl border border-rose-200 bg-rose-50 p-4">
-            <div class="text-xs text-rose-700">{{ t("execute.results.failed") }}</div>
-
-            <div class="mt-1 text-xl font-semibold text-rose-700">
-              {{ failedTests }}
-            </div>
-          </div>
-
-          <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
-            <div class="text-xs text-slate-600">{{ t("execute.results.duration") }}</div>
-
-            <div class="mt-1 text-xl font-semibold text-slate-700">
-              {{ executionDuration.toFixed(2) }}s
-            </div>
-          </div>
-        </div>
-
-        <!-- Result filters -->
-        <div v-if="testResults.length > 0" class="mt-5 flex items-center gap-2 border-b border-slate-100 pb-3">
-          <button v-for="filter in [
-            { id: 'all', label: t('execute.results.filterAll', { count: testResults.length }) },
-            { id: 'passed', label: t('execute.results.filterPassed', { count: passedTests }) },
-            { id: 'failed', label: t('execute.results.filterFailed', { count: failedTests }) },
-            { id: 'skipped', label: t('execute.results.filterSkipped', { count: skippedTests }) },
-          ]" :key="filter.id" type="button" class="rounded-lg px-3 py-1.5 text-xs font-medium transition" :class="resultFilter === filter.id
-            ? 'bg-slate-900 text-white'
-            : 'text-slate-500 hover:bg-slate-100'
-            " @click="resultFilter = filter.id as ResultFilter">
-            {{ filter.label }}
-          </button>
-        </div>
-
-        <!-- Failed tests -->
-        <div v-if="filteredResults.length > 0" class="mt-3 divide-y divide-slate-100">
-          <div v-for="result in filteredResults" :key="result.id" class="py-3">
-            <div class="flex items-center gap-3">
-              <component :is="getResultIcon(result.status)" class="h-4 w-4 shrink-0" :class="result.status === 'passed'
-                ? 'text-emerald-500'
-                : result.status === 'skipped'
-                  ? 'text-amber-500'
-                  : 'text-rose-500'
-                " />
-
-              <div class="min-w-0 flex-1">
-                <div class="truncate text-sm font-medium text-slate-800">
-                  {{ result.name }}
-                </div>
-
-                <div class="mt-0.5 truncate font-mono text-[11px] text-slate-500">
-                  {{ result.file }}
-                </div>
-              </div>
-
-              <span class="hidden rounded-full border px-2 py-1 text-[10px] font-medium sm:inline-flex"
-                :class="getResultClass(result.status)">
-                {{ getResultLabel(result.status) }}
-              </span>
-
-              <span class="w-12 text-right text-xs text-slate-400">
-                {{ result.duration.toFixed(2) }}s
-              </span>
-
-              <button v-if="
-                result.errorMessage &&
-                (result.status === 'failed' || result.status === 'error')
-              " type="button"
-                class="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-                @click="toggleFailure(result.id)">
-                <ChevronDown v-if="isFailureExpanded(result.id)" class="h-4 w-4" />
-
-                <ChevronRight v-else class="h-4 w-4" />
+          <!-- 结果筛选 + 列表 -->
+          <div v-if="testResults.length > 0" class="mt-4">
+            <div class="flex items-center gap-1 border-b border-border pb-2">
+              <button
+                v-for="filter in resultFilters"
+                :key="filter.id"
+                type="button"
+                class="rounded-md px-2.5 py-1 text-xs font-medium transition"
+                :class="
+                  resultFilter === filter.id
+                    ? 'bg-zinc-900 text-white'
+                    : 'text-zinc-500 hover:bg-zinc-100'
+                "
+                @click="resultFilter = filter.id"
+              >
+                {{ filter.label }}
               </button>
             </div>
 
-            <div v-if="
-              result.errorMessage &&
-              (result.status === 'failed' || result.status === 'error') &&
-              isFailureExpanded(result.id)
-            " class="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3">
-              <div class="flex items-center justify-between gap-3">
-                <span class="text-xs font-medium text-rose-800">
-                  {{ t("execute.results.failureDetails") }}
-                </span>
+            <div class="mt-1 divide-y divide-border">
+              <div v-for="result in filteredResults" :key="result.id" class="py-2.5">
+                <div class="flex items-center gap-3">
+                  <component
+                    :is="getResultIcon(result.status)"
+                    class="h-4 w-4 shrink-0"
+                    :class="
+                      result.status === 'passed'
+                        ? 'text-emerald-500'
+                        : result.status === 'skipped'
+                          ? 'text-amber-500'
+                          : 'text-rose-500'
+                    "
+                  />
+                  <div class="min-w-0 flex-1">
+                    <div class="truncate text-[13px] font-medium text-zinc-800">
+                      {{ result.name }}
+                    </div>
+                    <div class="mt-0.5 truncate font-mono text-[10px] text-zinc-500">
+                      {{ result.file }}
+                    </div>
+                  </div>
+                  <span
+                    class="hidden rounded-full border px-2 py-0.5 text-[10px] font-medium sm:inline-flex"
+                    :class="getResultClass(result.status)"
+                  >
+                    {{ getResultLabel(result.status) }}
+                  </span>
+                  <span class="w-12 text-right font-mono text-[11px] text-zinc-400">
+                    {{ result.duration.toFixed(2) }}s
+                  </span>
+                  <button
+                    v-if="
+                      result.errorMessage &&
+                      (result.status === 'failed' || result.status === 'error')
+                    "
+                    type="button"
+                    class="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
+                    @click="toggleFailure(result.id)"
+                  >
+                    <ChevronDown v-if="isFailureExpanded(result.id)" class="h-4 w-4" />
+                    <ChevronRight v-else class="h-4 w-4" />
+                  </button>
+                </div>
 
-                <button type="button"
-                  class="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-medium text-rose-700 transition hover:bg-rose-100"
-                  @click="copyError(result.errorMessage)">
-                  <Copy class="h-3 w-3" />
-                  {{ t("common.copy") }}
-                </button>
+                <div
+                  v-if="
+                    result.errorMessage &&
+                    (result.status === 'failed' || result.status === 'error') &&
+                    isFailureExpanded(result.id)
+                  "
+                  class="mt-2 rounded-lg border border-rose-200 bg-rose-50 p-3"
+                >
+                  <div class="flex items-center justify-between gap-3">
+                    <span class="text-xs font-medium text-rose-800">
+                      {{ t("execute.results.failureDetails") }}
+                    </span>
+                    <button
+                      type="button"
+                      class="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-medium text-rose-700 transition hover:bg-rose-100"
+                      @click="copyError(result.errorMessage)"
+                    >
+                      <Copy class="h-3 w-3" />
+                      {{ t("common.copy") }}
+                    </button>
+                  </div>
+                  <pre
+                    class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-rose-800"
+                    >{{ result.errorMessage }}</pre
+                  >
+                </div>
               </div>
+            </div>
 
-              <pre
-                class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-5 text-rose-800">
-            {{ result.errorMessage }}</pre>
+            <div v-if="filteredResults.length === 0" class="py-6 text-center text-xs text-zinc-500">
+              {{ t("execute.results.noResultsFilter") }}
             </div>
           </div>
         </div>
-
-        <div v-else class="py-8 text-center text-xs text-slate-500">
-          {{ t("execute.results.noResultsFilter") }}
-        </div>
-      </div>
+      </template>
     </section>
 
-    <!-- Pytest Output -->
-    <section v-if="pytestOutput.length > 0" class="rounded-2xl border border-slate-200 bg-white">
-      <button type="button" class="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
-        @click="showPytestOutput = !showPytestOutput">
-        <div class="flex min-w-0 items-center gap-3">
-          <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100">
-            <SlidersHorizontal class="h-4 w-4 text-slate-500" />
-          </div>
+    <!-- Save Selection Modal（统一 AppModal） -->
+    <AppModal
+      v-model:open="showSaveSuiteModal"
+      :title="t('execute.saveSuiteModal.title')"
+      :description="
+        t('execute.suiteTargets', { count: executionTargets.length }) +
+        ' · ' +
+        (activeArguments.join(' ') || t('execute.saveSuiteModal.defaultArgs'))
+      "
+    >
+      <label class="label" for="suite-name">
+        {{ t("execute.saveSuiteModal.name") }}
+        <input
+          id="suite-name"
+          v-model="newSuiteName"
+          type="text"
+          class="input mt-1.5"
+          :placeholder="t('execute.saveSuiteModal.namePlaceholder')"
+          @keyup.enter="saveSuite"
+        />
+      </label>
 
-          <div class="min-w-0">
-            <div class="text-sm font-medium text-slate-800">{{ t("execute.output.title") }}</div>
+      <template #footer>
+        <AppButton variant="ghost" @click="showSaveSuiteModal = false">{{ t("common.cancel") }}</AppButton>
+        <AppButton
+          variant="primary"
+          :disabled="!newSuiteName.trim() || isSavingSuite"
+          :loading="isSavingSuite"
+          @click="saveSuite"
+        >
+          <Save class="h-4 w-4" />
+          {{ t("execute.saveSuiteModal.save") }}
+        </AppButton>
+      </template>
+    </AppModal>
 
-            <div class="mt-1 text-xs text-slate-500">
-              {{ t("execute.output.logLines", { count: pytestOutput.length }) }}
-            </div>
-          </div>
-        </div>
+    <!-- 运行完成弹窗（手动运行）：覆盖率 / 保存选择 / 稍后 -->
+    <AppModal
+      v-model:open="showPostRunModal"
+      :title="t('execute.postRun.title')"
+      :description="
+        postRunSummary
+          ? t('execute.postRun.description', {
+              passed: postRunSummary.passed,
+              failed: postRunSummary.failed,
+              skipped: postRunSummary.skipped,
+              duration: postRunSummary.duration.toFixed(2),
+            })
+          : ''
+      "
+    >
+      <p class="text-xs leading-5 text-zinc-500">{{ t("execute.postRun.hint") }}</p>
+      <template #footer>
+        <AppButton variant="ghost" @click="showPostRunModal = false">
+          {{ t("execute.postRun.notNow") }}
+        </AppButton>
+        <AppButton variant="secondary" @click="saveFromPostRun">
+          <Save class="h-4 w-4" />
+          {{ t("execute.postRun.saveSelection") }}
+        </AppButton>
+        <AppButton variant="primary" @click="runCoverageFromPostRun">
+          <Gauge class="h-4 w-4" />
+          {{ t("execute.postRun.runCoverage") }}
+        </AppButton>
+      </template>
+    </AppModal>
 
-        <ChevronDown class="h-4 w-4 shrink-0 text-slate-400 transition-transform" :class="{
-          'rotate-180': showPytestOutput,
-        }" />
-      </button>
-
-      <div v-if="showPytestOutput" class="border-t border-slate-200">
-        <div class="flex items-center justify-end gap-2 border-b border-slate-800 bg-slate-950 px-4 py-2">
-          <button type="button"
-            class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-slate-300 transition hover:bg-slate-800 hover:text-white"
-            @click="copyLogs">
-            <Copy class="h-3 w-3" />
-            {{ t("common.copy") }}
-          </button>
-
-          <button type="button"
-            class="rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-slate-300 transition hover:bg-slate-800 hover:text-white"
-            @click="clearOutput">
-            {{ t("common.clear") }}
-          </button>
-        </div>
-
-        <div class="bg-slate-950 p-4">
-          <pre class="max-h-125 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-xs leading-5"><span
-          v-for="output in pytestOutput" :key="output.logId" :class="output.stream === 'stderr'
-            ? 'text-rose-300'
-            : 'text-slate-300'
-            ">{{ output.line }}
-          {{ "\n" }}</span></pre>
-        </div>
-      </div>
-    </section>
-
-    <!-- Save Suite Modal -->
-    <div v-if="showSaveSuiteModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
-      @click.self="showSaveSuiteModal = false">
-      <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
-        <div class="flex items-start justify-between gap-4">
-          <div>
-            <h3 class="text-sm font-semibold text-slate-900">{{ t("execute.saveSuiteModal.title") }}</h3>
-
-            <p class="mt-1 text-xs text-slate-500">
-              {{ t("execute.suiteTargets", { count: executionTargets.length }) }}
-              · {{ activeArguments.join(" ") || t("execute.saveSuiteModal.defaultArgs") }}
-            </p>
-          </div>
-
-          <button type="button" class="rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
-            @click="showSaveSuiteModal = false">
-            <XCircle class="h-4 w-4" />
-          </button>
-        </div>
-
-        <label class="mt-4 block text-xs font-medium text-slate-700">
-          {{ t("execute.saveSuiteModal.name") }}
-          <input v-model="newSuiteName" type="text" :placeholder="t('execute.saveSuiteModal.namePlaceholder')"
-            class="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-            @keyup.enter="saveSuite" />
-        </label>
-
-        <div class="mt-5 flex items-center justify-end gap-2">
-          <button type="button"
-            class="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100"
-            @click="showSaveSuiteModal = false">
-            {{ t("common.cancel") }}
-          </button>
-
-          <button type="button" :disabled="!newSuiteName.trim() || isSavingSuite"
-            class="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-5 py-2 text-sm font-medium text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
-            @click="saveSuite">
-            <Save class="h-4 w-4" />
-            {{ isSavingSuite ? t("common.saving") : t("execute.saveSuiteModal.save") }}
-          </button>
-        </div>
-      </div>
-    </div>
+    <!-- 删除已保存选择确认 -->
+    <AppConfirmModal
+      :open="deleteSuiteTarget !== null"
+      :title="t('execute.deleteSuiteTitle')"
+      :description="
+        deleteSuiteTarget
+          ? t('execute.deleteSuiteConfirm', { name: deleteSuiteTarget.suiteName })
+          : ''
+      "
+      :confirm-label="t('common.delete')"
+      @confirm="confirmDeleteSuite"
+      @update:open="(open: boolean) => { if (!open) deleteSuiteTarget = null }"
+    />
   </div>
 </template>

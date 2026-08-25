@@ -28,6 +28,8 @@ pub fn run() {
             commands::coverage::get_coverage_detail,
             commands::coverage::export_coverage_report,
             commands::env::detect_python_env,
+            commands::env::check_generation_env,
+            commands::env::fix_python_env,
             commands::env::install_dependencies,
             commands::env::validate_project_directory,
             commands::env::create_virtual_env,
@@ -35,6 +37,8 @@ pub fn run() {
             commands::files::open_in_file_manager,
             commands::generation::scan_source_files,
             commands::generation::generate_tests,
+            commands::generation::check_python_bom,
+            commands::generation::strip_python_bom,
             commands::files::open_file,
             commands::files::reveal_in_folder,
             commands::db_commands::init_db,
@@ -47,6 +51,11 @@ pub fn run() {
             commands::db_commands::save_coverage_result,
             commands::db_commands::count_execution_history,
             commands::db_commands::get_global_stats,
+            commands::db_commands::list_execution_history,
+            commands::db_commands::save_generation_history,
+            commands::db_commands::list_generation_history,
+            commands::db_commands::save_coverage_history,
+            commands::db_commands::list_coverage_history,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

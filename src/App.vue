@@ -13,7 +13,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="h-screen w-screen overflow-hidden bg-slate-50 text-slate-900 antialiased">
+  <div class="h-screen w-screen overflow-hidden bg-surface text-zinc-900 antialiased">
     <router-view v-slot="{ Component }">
       <transition name="fade" mode="out-in">
         <component :is="Component" />
@@ -23,7 +23,7 @@ onUnmounted(() => {
 </template>
 
 <style>
-/* 页面切换过渡动画 */
+/* 页面切换过渡动画（尊重系统减少动态效果偏好） */
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 150ms ease;
@@ -32,5 +32,12 @@ onUnmounted(() => {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-enter-active,
+  .fade-leave-active {
+    transition: none;
+  }
 }
 </style>

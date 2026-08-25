@@ -1,12 +1,50 @@
 @import "tailwindcss";
 
-/* *,
-*::before,
-*::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-} */
+/* ============================================================
+   Testmate Design Tokens (Tailwind v4 @theme)
+   风格：Linear 式极简开发工具 · 单一品牌强调色
+   中性色统一为 zinc 系；状态色保留 emerald/amber/rose/sky
+   ============================================================ */
+@theme {
+  /* 字体 */
+  --font-sans: "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+
+  /* 品牌强调色 —— 全应用唯一的"主色"（避免与状态色混淆） */
+  --color-brand-50: #eef4ff;
+  --color-brand-100: #dce7fd;
+  --color-brand-200: #c0d3fb;
+  --color-brand-300: #94b4f8;
+  --color-brand-400: #618cf3;
+  --color-brand-500: #3b6ef0;
+  --color-brand-600: #2a53e0;
+  --color-brand-700: #2242b8;
+  --color-brand-800: #203a94;
+  --color-brand-900: #1e3477;
+
+  /* 语义化表面 */
+  --color-surface: #fafafa; /* 应用背景 */
+  --color-raised: #ffffff; /* 卡片 / 面板 */
+  --color-border: #e4e4e7; /* 发丝线边框 */
+  --color-muted: #71717a; /* 次要文本 */
+
+  /* 兼容层：旧代码的 slate 中性色统一映射为 zinc，一次性收敛全应用中灰色 */
+  --color-slate-50: #fafafa;
+  --color-slate-100: #f4f4f5;
+  --color-slate-200: #e4e4e7;
+  --color-slate-300: #d4d4d8;
+  --color-slate-400: #a1a1aa;
+  --color-slate-500: #71717a;
+  --color-slate-600: #52525b;
+  --color-slate-700: #3f3f46;
+  --color-slate-800: #27272a;
+  --color-slate-900: #18181b;
+  --color-slate-950: #09090b;
+
+  /* 圆角收敛：旧代码的 rounded-2xl/3xl 统一为 12px 卡片圆角 */
+  --radius-2xl: 12px;
+  --radius-3xl: 12px;
+}
 
 html,
 body,
@@ -14,14 +52,14 @@ body,
   height: 100%;
   width: 100%;
   overflow: hidden;
-  font-family: 'Inter', 'Segoe UI', 'SF Pro Display', system-ui, sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 .font-mono {
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
-  font-feature-settings: 'liga' 1, 'calt' 1; /* 启用连字 */
+  font-family: var(--font-mono);
+  font-feature-settings: "liga" 1, "calt" 1; /* 启用连字 */
 }
 
 body {
@@ -29,24 +67,24 @@ body {
   -webkit-user-select: none;
 }
 
-/* 但输入框、代码块、日志等需要选中的地方恢复 */
+/* 输入框、代码块、日志等需要选中的地方恢复 */
 input,
 textarea,
-[contenteditable='true'],
+[contenteditable="true"],
 .font-mono {
   user-select: text;
   -webkit-user-select: text;
 }
 
-/* 去除按钮/链接的默认 outline，改用自定义 focus ring */
+/* 全局 focus ring（组件级类优先覆盖） */
 button:focus-visible,
 a:focus-visible,
 input:focus-visible {
-  outline: 2px solid rgb(16 185 129 / 0.4); /* emerald-500 */
+  outline: 2px solid rgb(59 110 240 / 0.45); /* brand-500 */
   outline-offset: 1px;
 }
 
-/* ✅ 5. 滚动条美化（极客极简风） */
+/* 滚动条（极简） */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -55,9 +93,72 @@ input:focus-visible {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgb(228 228 231 / 0.6); /* zinc-200 */
+  background: rgb(228 228 231 / 0.7); /* zinc-200 */
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgb(161 161 170 / 0.8); /* zinc-400 */
+  background: rgb(161 161 170 / 0.85); /* zinc-400 */
+}
+
+/* ============================================================
+   组件基类（按钮 / 卡片 / 输入框 / 标签）
+   用法：class="btn btn-primary" / "btn btn-secondary btn-sm"
+   ============================================================ */
+@layer components {
+  /* --- 按钮 --- */
+  .btn {
+    @apply inline-flex select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-lg font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-500 disabled:pointer-events-none disabled:opacity-50;
+  }
+  .btn-md {
+    @apply h-9 px-3.5 text-[13px];
+  }
+  .btn-sm {
+    @apply h-7 rounded-md px-2.5 text-xs;
+  }
+  .btn-primary {
+    @apply bg-brand-500 text-white hover:bg-brand-600 active:bg-brand-700;
+  }
+  .btn-secondary {
+    @apply border border-border bg-white text-zinc-700 hover:bg-zinc-50 active:bg-zinc-100;
+  }
+  .btn-ghost {
+    @apply text-zinc-600 hover:bg-zinc-100 active:bg-zinc-200;
+  }
+  .btn-danger {
+    @apply text-zinc-400 hover:bg-rose-50 hover:text-rose-600;
+  }
+  .btn-danger-solid {
+    @apply bg-rose-500 text-white hover:bg-rose-600 active:bg-rose-700;
+  }
+
+  /* --- 卡片 --- */
+  .card {
+    @apply rounded-xl border border-border bg-raised;
+  }
+
+  /* --- 输入框 --- */
+  .input {
+    @apply h-9 w-full rounded-lg border border-border bg-white px-3 text-[13px] text-zinc-800 placeholder:text-zinc-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/15;
+  }
+
+  /* --- 分区小标题（大写） --- */
+  .section-label {
+    @apply px-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400;
+  }
+
+  /* --- 表单标签 --- */
+  .label {
+    @apply block text-xs font-medium text-zinc-700;
+  }
+}
+
+/* 尊重系统"减少动态效果"偏好 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

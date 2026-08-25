@@ -51,21 +51,36 @@ pub async fn detect_python_env(project_path: String) -> Result<EnvDetectionResul
     // 2. Fallback: Detect Global Python (If no venv found)
     // ----------------------------------------
     if !result.venv_exists {
-        let global_python = if cfg!(target_os = "windows") { "python" } else { "python3" };
+        // Windows 下 GUI 进程可能拿不到完整 PATH（如 MS Store 别名、仅装 py 启动器），
+        // 依次尝试 python / python3 / py（Windows launcher）
+        let candidates: &[(&str, &[&str])] = if cfg!(target_os = "windows") {
+            &[("python", &[]), ("python3", &[]), ("py", &["-3"])]
+        } else {
+            &[("python3", &[]), ("python", &[])]
+        };
 
-        if let Ok(output) = Command::new(global_python).arg("--version").output() {
-            if output.status.success() {
-                let version = if output.stdout.is_empty() {
-                    String::from_utf8_lossy(&output.stderr).trim().to_string()
-                } else {
-                    String::from_utf8_lossy(&output.stdout).trim().to_string()
-                };
-                result.python_path = Some(global_python.to_string());
-                result.python_version = Some(version);
+        for (cmd, args) in candidates {
+            let mut command = Command::new(cmd);
+            command.args(*args).arg("--version");
+
+            let Ok(output) = command.output() else {
+                continue;
+            };
+            if !output.status.success() {
+                continue;
             }
+
+            let version = if output.stdout.is_empty() {
+                String::from_utf8_lossy(&output.stderr).trim().to_string()
+            } else {
+                String::from_utf8_lossy(&output.stdout).trim().to_string()
+            };
+            result.python_path = Some(cmd.to_string());
+            result.python_version = Some(version);
+            break;
         }
-        // 注意：如果没有 venv 也没有全局 python，这里会返回 python_path 为 None 的结果
-        // 前端可以根据 python_path.is_none() 提示用户安装 Python
+        // 注意：如果所有候选都失败（未安装/不在 PATH），python_path 保持 None，
+        // 前端根据 python_path.is_none() 提示用户安装 Python。
         return Ok(result);
     }
 
@@ -94,8 +109,12 @@ pub async fn detect_python_env(project_path: String) -> Result<EnvDetectionResul
 
     if req_file_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&req_file_path) {
+            // 兼容 UTF-8 BOM（Windows 记事本 / VS Code 常见）：
+            // 否则首行包名会带上 \u{feff}，导致 "Invalid requirement: '\ufeffpytest'"
+            let content = content.trim_start_matches('\u{feff}');
+
             for line in content.lines() {
-                let line = line.trim();
+                let line = line.trim().trim_start_matches('\u{feff}');
                 // 跳过空行和注释
                 if line.is_empty() || line.starts_with('#') {
                     continue;
@@ -168,6 +187,22 @@ pub async fn detect_python_env(project_path: String) -> Result<EnvDetectionResul
 // ============================================
 // Command 2: Install Missing Dependencies
 // ============================================
+
+/// 从 pip 的 stderr 中提取最可能说明问题的末尾几行（去掉空行，最长 400 字符）
+fn summarize_pip_error(stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    let tail: Vec<&str> = lines.iter().rev().take(4).copied().collect();
+    let mut summary = tail.iter().rev().cloned().collect::<Vec<_>>().join("\n");
+    if summary.len() > 400 {
+        summary = summary.chars().take(400).collect::<String>() + "…";
+    }
+    summary
+}
+
 #[tauri::command]
 pub async fn install_dependencies(
     app: tauri::AppHandle,
@@ -179,12 +214,13 @@ pub async fn install_dependencies(
             success: true,
             installed: vec![],
             failed: vec![],
+            failed_reasons: vec![],
         });
     }
 
     let mut installed = vec![];
     let mut failed = vec![];
-    // 🧹 移除了 let mut all_logs = String::new();
+    let mut failed_reasons = vec![];
 
     for package in &packages {
         // 1️⃣ Emit: 开始安装
@@ -208,6 +244,7 @@ pub async fn install_dependencies(
             });
         } else {
             failed.push(package.clone());
+            failed_reasons.push(summarize_pip_error(&output.stderr));
 
             // 3️⃣ Emit: 安装失败
             let _ = app.emit("install_step", InstallStep {
@@ -221,7 +258,225 @@ pub async fn install_dependencies(
         success: failed.is_empty(),
         installed,
         failed,
+        failed_reasons,
     })
+}
+
+// ============================================
+// 生成环境健康检查（Python / pynguin / bytecode 版本）
+// 用于 Generate 页提前提示已知兼容性问题
+// ============================================
+#[tauri::command]
+pub async fn check_generation_env(
+    interpreter_path: String,
+) -> Result<GenerationEnvInfo, String> {
+    let script = concat!(
+        "import sys, importlib.metadata as m\n",
+        "print(sys.version.split()[0])\n",
+        "for pkg in ('pynguin', 'bytecode'):\n",
+        "    try:\n",
+        "        print(pkg + '=' + m.version(pkg))\n",
+        "    except Exception:\n",
+        "        print(pkg + '=missing')\n",
+    );
+
+    let output = Command::new(&interpreter_path)
+        .args(["-c", script])
+        .output()
+        .map_err(|e| format!("Failed to run python: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut python_version = String::new();
+    let mut pynguin_version: Option<String> = None;
+    let mut bytecode_version: Option<String> = None;
+
+    for (i, line) in stdout.lines().enumerate() {
+        if i == 0 {
+            python_version = line.trim().to_string();
+            continue;
+        }
+        if let Some((pkg, ver)) = line.trim().split_once('=') {
+            if ver == "missing" {
+                continue;
+            }
+            match pkg {
+                "pynguin" => pynguin_version = Some(ver.to_string()),
+                "bytecode" => bytecode_version = Some(ver.to_string()),
+                _ => {}
+            }
+        }
+    }
+
+    Ok(GenerationEnvInfo {
+        python_version,
+        pynguin_version,
+        bytecode_version,
+    })
+}
+
+// ============================================
+// 一键修复生成环境：安装 Python 3.11 → 重建 venv → 装依赖 → 更新项目
+// ============================================
+
+/// 定位可用的 Python 3.11 解释器（py launcher → 已知安装路径）
+fn resolve_python_311() -> Option<String> {
+    // 1) py launcher
+    if let Ok(output) = Command::new("py")
+        .args(["-3.11", "-c", "import sys; print(sys.executable)"])
+        .output()
+    {
+        if output.status.success() {
+            let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !s.is_empty() {
+                return Some(s);
+            }
+        }
+    }
+    // 2) 已知的 per-user 安装路径
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        let p = PathBuf::from(local)
+            .join("Programs")
+            .join("Python")
+            .join("Python311")
+            .join("python.exe");
+        if p.exists() {
+            return Some(p.to_string_lossy().to_string());
+        }
+    }
+    None
+}
+
+/// 一键修复：winget 安装 Python 3.11（如需）→ 重建 .venv → 安装依赖 → 更新项目解释器
+/// project_id 为空时（Import 流程）跳过数据库更新，由前端重新检测。
+/// 进度通过 "env-fix-step" 事件逐阶段推送。
+#[tauri::command]
+pub async fn fix_python_env(
+    app: tauri::AppHandle,
+    project_path: String,
+    project_id: Option<i64>,
+) -> Result<String, String> {
+    let emit = |stage: &str, status: &str, message: &str| {
+        let _ = app.emit(
+            "env-fix-step",
+            crate::commands::EnvFixStep {
+                stage: stage.to_string(),
+                status: status.to_string(),
+                message: message.to_string(),
+            },
+        );
+    };
+
+    // 1) 定位 Python 3.11；缺失则用 winget 静默安装
+    if resolve_python_311().is_none() {
+        emit("winget", "running", "Installing Python 3.11 via winget...");
+        let output = AsyncCommand::new("winget")
+            .args([
+                "install",
+                "-e",
+                "--id",
+                "Python.Python.3.11",
+                "--silent",
+                "--accept-package-agreements",
+                "--accept-source-agreements",
+            ])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to run winget: {}. Please install Python 3.11 manually from python.org.", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "Failed to install Python 3.11 via winget: {}. Please install it manually from python.org.",
+                stderr.trim()
+            ));
+        }
+        emit("winget", "success", "Python 3.11 installed.");
+    } else {
+        emit("winget", "success", "Python 3.11 already installed.");
+    }
+
+    let py311 = resolve_python_311()
+        .ok_or_else(|| "Python 3.11 not found after installation. Please install it manually from python.org.".to_string())?;
+
+    let root = PathBuf::from(&project_path);
+    if !root.is_dir() {
+        return Err(format!("Project directory not found: {}", project_path));
+    }
+    let venv_dir = root.join(".venv");
+
+    // 2) 删除旧 venv
+    if venv_dir.exists() {
+        emit("venv", "running", "Removing old .venv...");
+        std::fs::remove_dir_all(&venv_dir)
+            .map_err(|e| format!("Failed to remove old .venv: {}", e))?;
+    }
+
+    // 3) 用 3.11 创建新 venv
+    emit("venv", "running", "Creating .venv with Python 3.11...");
+    let output = AsyncCommand::new(&py311)
+        .args(["-m", "venv", ".venv"])
+        .current_dir(&root)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run python -m venv: {}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Failed to create .venv: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    emit("venv", "success", ".venv created.");
+
+    let venv_python = if cfg!(target_os = "windows") {
+        venv_dir.join("Scripts").join("python.exe")
+    } else {
+        venv_dir.join("bin").join("python")
+    };
+    if !venv_python.exists() {
+        return Err("New .venv has no python executable.".to_string());
+    }
+
+    // 4) 安装依赖（有 requirements.txt 则按它装，否则装默认三件套）
+    emit("deps", "running", "Installing project dependencies...");
+    let req = root.join("requirements.txt");
+    let mut pip = AsyncCommand::new(&venv_python);
+    pip.arg("-m").arg("pip").arg("install");
+    if req.exists() {
+        pip.args(["-r", "requirements.txt"]);
+    } else {
+        pip.args(["pytest", "coverage", "pynguin"]);
+    }
+    let output = pip
+        .current_dir(&root)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run pip install: {}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Failed to install dependencies: {}",
+            String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .rev()
+                .take(5)
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    emit("deps", "success", "Dependencies installed.");
+
+    // 5) 更新项目解释器（Import 流程无 project_id 则跳过）
+    if let Some(pid) = project_id {
+        emit("db", "running", "Updating project interpreter...");
+        crate::db::update_project_interpreter(&app, pid, &venv_python.to_string_lossy()).await?;
+        emit("db", "success", "Project interpreter updated.");
+    }
+
+    emit("done", "success", "Environment ready.");
+    Ok(venv_python.to_string_lossy().to_string())
 }
 
 // ============================================

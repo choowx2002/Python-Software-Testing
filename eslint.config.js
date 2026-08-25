@@ -7,6 +7,10 @@ export default defineConfigWithVueTs(
   vueTsConfigs.recommended,
   skipFormatting,
   {
+    // 构建产物与 pytest 临时缓存目录不参与 lint
+    ignores: ['dist/**', 'src-tauri/target/**', 'pytest-cache-files-*/**'],
+  },
+  {
     files: ['**/*.vue', '**/*.ts', '**/*.tsx', '**/*.js'],
     rules: {
       'vue/multi-word-component-names': 'off',

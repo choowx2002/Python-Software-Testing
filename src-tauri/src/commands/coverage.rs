@@ -24,6 +24,10 @@ pub struct CoverageSummary {
     pub percent_covered: f64,
     pub total_statements: usize,
     pub covered_statements: usize,
+    /// 分支覆盖率（--branch 模式下有效）：总分支数 / 已覆盖分支数 / 分支覆盖率百分比
+    pub total_branches: Option<u64>,
+    pub covered_branches: Option<u64>,
+    pub branch_percent: Option<f64>,
     pub files: Vec<FileCoverage>,
     pub json_path: String,
     pub command: String,
@@ -193,9 +197,31 @@ pub async fn run_coverage(
     ];
 
     if !source_dirs.is_empty() {
-        // coverage 的 --source 接受逗号分隔的相对路径（相对 cwd = 项目根）
-        args.push(format!("--source={}", source_dirs.join(",")));
+        // 前端以 "." 表示"项目根目录"（根目录源文件）。coverage 的 --source
+        // 按导入的模块名匹配，但根目录文件既可能被 `import example` 也可能被
+        // `import pyExample.example` 导入（根目录有 __init__.py 时为包布局），
+        // 传模块名无法覆盖两种情况 —— 这里把 "." 解析为项目根绝对路径，
+        // 让 coverage 按文件位置追踪导入，最鲁棒。
+        let resolved: Vec<String> = source_dirs
+            .iter()
+            .map(|d| {
+                if d == "." {
+                    project.to_string_lossy().to_string()
+                } else {
+                    d.clone()
+                }
+            })
+            .collect();
+        args.push(format!("--source={}", resolved.join(",")));
+        // 排除测试/依赖目录，避免报告混入 tests、site-packages 等文件
+        args.push(
+            "--omit=*/tests/*,*/site-packages/*,*/__pycache__/*,*/.venv/*,*/venv/*,*/pynguin-results/*"
+                .to_string(),
+        );
     }
+
+    // FR011：启用分支覆盖率采集（statement + branch），与论文 Table 4.1 口径一致
+    args.push("--branch".to_string());
 
     args.push("-m".to_string());
     args.push("pytest".to_string());
@@ -325,10 +351,17 @@ pub async fn run_coverage(
         .map_err(|e| format!("Failed to execute coverage json: {}", e))?;
 
     if !json_output.status.success() {
-        let message = format!(
-            "coverage json export failed:\n{}",
-            String::from_utf8_lossy(&json_output.stderr).trim()
-        );
+        let stderr_text = String::from_utf8_lossy(&json_output.stderr).trim().to_string();
+        let stdout_text = String::from_utf8_lossy(&json_output.stdout).trim().to_string();
+        let mut detail = if stderr_text.is_empty() {
+            stdout_text
+        } else {
+            stderr_text
+        };
+        if detail.is_empty() {
+            detail = "No output captured. The coverage run likely collected no data — check that the selected source files map to importable module names/directories (root-level files are passed as module names, e.g. example.py -> example).".to_string();
+        }
+        let message = format!("coverage json export failed.\nCommand: {}\n{}", json_cmd, detail);
         let _ = app.emit(
             "coverage-error",
             CoverageErrorEvent {
@@ -389,6 +422,9 @@ pub async fn run_coverage(
         percent_covered: totals.percent_covered,
         total_statements: totals.total_statements,
         covered_statements: totals.covered_statements,
+        total_branches: totals.num_branches,
+        covered_branches: totals.covered_branches,
+        branch_percent: totals.branch_percent(),
         files,
         json_path: json_path.to_string_lossy().to_string(),
         command: command_str.clone(),
@@ -570,6 +606,19 @@ pub(crate) struct CoverageTotals {
     pub percent_covered: f64,
     pub total_statements: usize,
     pub covered_statements: usize,
+    pub num_branches: Option<u64>,
+    pub covered_branches: Option<u64>,
+}
+
+impl CoverageTotals {
+    /// 分支覆盖率百分比（仅 --branch 模式下 num_branches > 0 时有效）
+    pub fn branch_percent(&self) -> Option<f64> {
+        let total = self.num_branches?;
+        if total == 0 {
+            return None;
+        }
+        Some(self.covered_branches.unwrap_or(0) as f64 * 100.0 / total as f64)
+    }
 }
 
 /// 解析 coverage json 输出（兼容 format 1 与 format 2）
@@ -594,6 +643,9 @@ pub fn parse_coverage_json(content: &str) -> Result<(CoverageTotals, Vec<FileCov
         .get("covered_lines")
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as usize;
+    // 分支统计（--branch 模式下 coverage.py 才会输出这两个字段）
+    let num_branches = totals_json.get("num_branches").and_then(|v| v.as_u64());
+    let covered_branches = totals_json.get("covered_branches").and_then(|v| v.as_u64());
 
     let files_json = json
         .get("files")
@@ -625,6 +677,8 @@ pub fn parse_coverage_json(content: &str) -> Result<(CoverageTotals, Vec<FileCov
             percent_covered,
             total_statements,
             covered_statements,
+            num_branches,
+            covered_branches,
         },
         files,
     ))

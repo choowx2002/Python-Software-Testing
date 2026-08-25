@@ -280,6 +280,13 @@ pub async fn generate_tests(
         std::fs::create_dir_all(&module_output_dir)
             .map_err(|e| format!("Failed to create module output directory: {}", e))?;
 
+        // 生成目录以 Python 包形式存在（写入 __init__.py）：
+        // 否则 pytest 会把 tests/generated/cart/test_cart.py 按裸模块名 "test_cart" 导入，
+        // 与手写的 tests/test_cart.py 同名冲突（import file mismatch）。
+        // 幂等：每次生成都确保存在。
+        let _ = std::fs::write(output_base.join("__init__.py"), "");
+        let _ = std::fs::write(module_output_dir.join("__init__.py"), "");
+
         // Build Pynguin arguments
         let mut args = vec![
             "-m".to_string(),
@@ -539,4 +546,62 @@ fn count_test_cases(path: &Path) -> usize {
             trimmed.starts_with("def test_") || trimmed.starts_with("async def test_")
         })
         .count()
+}
+
+// ============================================
+// UTF-8 BOM 处理（Pynguin 兼容性）
+// Pynguin 通过 ast.parse(字符串) 解析源码，带 BOM 的文件会触发
+// "invalid non-printable character U+FEFF" SyntaxError。
+// Python 解释器本身可容忍磁盘文件的 BOM，故仅在生成前检查并修复。
+// ============================================
+
+/// 检查指定源文件是否带 UTF-8 BOM，返回带 BOM 的文件相对路径列表
+#[tauri::command]
+pub async fn check_python_bom(
+    project_path: String,
+    files: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let root = PathBuf::from(&project_path);
+    let mut bom_files = Vec::new();
+
+    for rel in &files {
+        let path = root.join(rel);
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        if bytes.len() >= 3 && bytes[..3] == [0xEF, 0xBB, 0xBF] {
+            bom_files.push(rel.clone());
+        }
+    }
+
+    Ok(bom_files)
+}
+
+/// 无损移除指定文件的 UTF-8 BOM（仅去掉 EF BB BF 前缀，其余字节原样保留），
+/// 返回被修复的文件相对路径列表
+#[tauri::command]
+pub async fn strip_python_bom(
+    project_path: String,
+    files: Vec<String>,
+) -> Result<Vec<String>, String> {
+    use std::io::Write;
+
+    let root = PathBuf::from(&project_path);
+    let mut fixed = Vec::new();
+
+    for rel in &files {
+        let path = root.join(rel);
+        let bytes = std::fs::read(&path).map_err(|e| format!("Failed to read {}: {}", rel, e))?;
+        if bytes.len() < 3 || bytes[..3] != [0xEF, 0xBB, 0xBF] {
+            continue;
+        }
+
+        let mut file =
+            std::fs::File::create(&path).map_err(|e| format!("Failed to rewrite {}: {}", rel, e))?;
+        file.write_all(&bytes[3..])
+            .map_err(|e| format!("Failed to write {}: {}", rel, e))?;
+        fixed.push(rel.clone());
+    }
+
+    Ok(fixed)
 }
