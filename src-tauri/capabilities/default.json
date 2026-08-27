@@ -1,29 +1,18 @@
 {
     "$schema": "../gen/schemas/desktop-schema.json",
     "identifier": "default",
-    "description": "Capability for the main window",
-    "windows": ["main"],
+    "description": "Least-privilege capability for the main window",
+    "windows": ["main", "detail"],
     "permissions": [
         "core:default",
-        "opener:default",
+        "core:window:allow-set-title",
+        "core:window:allow-close",
+        "core:webview:allow-create-webview-window",
         "dialog:default",
         "dialog:allow-open",
-        "shell:default",
-        "shell:allow-spawn",
-        "fs:allow-read",
         "sql:default",
-        "store:default",
         "sql:allow-execute",
-        "sql:allow-load",
-        "sql:allow-select",
-        "core:window:allow-start-dragging",
-        {
-            "identifier": "opener:allow-open-path",
-            "allow": [
-                { "path": "$HOME/**" },
-                { "path": "$APPDATA/**" },
-                { "path": "$TEMP/**" }
-            ]
-        }
+        "store:default",
+        "opener:default"
     ]
 }

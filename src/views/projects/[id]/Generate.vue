@@ -19,10 +19,12 @@ import {
   Circle,
   CircleDot,
   Copy,
+  Eye,
   Folder,
   FolderOpen,
   Loader2,
   Play,
+  RefreshCw,
   Search,
   Settings2,
   Square,
@@ -33,8 +35,10 @@ import {
 } from "@lucide/vue";
 import { useProjectStore } from "../../../stores/projectStore";
 import TreeItem from "../../../components/TreeItem.vue";
+import { interpretError, type InterpretedError } from "../../../utils/errors";
 import { useI18n } from "vue-i18n";
 import AppButton from "../../../components/ui/AppButton.vue";
+import AppModal from "../../../components/ui/AppModal.vue";
 import AppConfirmModal from "../../../components/ui/AppConfirmModal.vue";
 import AppTooltip from "../../../components/ui/AppTooltip.vue";
 import AppContextMenu from "../../../components/ui/AppContextMenu.vue";
@@ -177,7 +181,7 @@ const sourceTree = ref<TreeNode[]>([]);
 const expandedDirs = ref<Set<string>>(new Set());
 
 const isLoadingSources = ref(false);
-const sourceScanError = ref<string | null>(null);
+const sourceScanError = ref<InterpretedError | null>(null);
 
 const sourceSearch = ref("");
 
@@ -608,19 +612,34 @@ async function setupGenerationListeners() {
         showGenerationLog.value = true;
       }
 
-      // 持久化生成历史（NFR008：走 Rust 类型化命令）
+      // 持久化生成历史（NFR008：走 Rust 类型化命令）+ 文件明细
       if (currentProject.value?.id) {
         const generatedCount = event.payload.generatedFiles.filter(
           (f) => f.status === "success",
         ).length;
-        void invoke("save_generation_history", {
-          projectId: currentProject.value.id,
-          generationStatus: event.payload.success ? "success" : "failed",
-          totalFiles: event.payload.generatedFiles.length,
-          generatedFiles: generatedCount,
-          duration: event.payload.duration,
-          command: event.payload.command || null,
-        }).catch((e) => console.error("[Generate] save history failed:", e));
+        try {
+          const generationId = await invoke<number>("save_generation_history", {
+            projectId: currentProject.value.id,
+            generationStatus: event.payload.success ? "success" : "failed",
+            totalFiles: event.payload.generatedFiles.length,
+            generatedFiles: generatedCount,
+            duration: event.payload.duration,
+            command: event.payload.command || null,
+          });
+          if (event.payload.generatedFiles.length > 0) {
+            await invoke("save_generation_file_details", {
+              generationId,
+              files: event.payload.generatedFiles.map((f) => ({
+                name: f.name,
+                relativePath: f.relativePath || null,
+                testCaseCount: f.testCaseCount,
+                status: f.status,
+              })),
+            });
+          }
+        } catch (e) {
+          console.error("[Generate] save history failed:", e);
+        }
       }
 
       // 生成结束后刷新环境状态（用户可能中途修复了依赖）
@@ -637,7 +656,7 @@ async function scanSourceFiles() {
   const projectPath = currentProject.value?.path;
 
   if (!projectPath) {
-    sourceScanError.value = t("execute.projectPathUnavailable");
+    sourceScanError.value = { message: t("execute.projectPathUnavailable") };
     return;
   }
 
@@ -652,7 +671,7 @@ async function scanSourceFiles() {
     sourceTree.value = buildSourceTree(sourceFiles.value);
   } catch (error) {
     console.error("[Generate] Failed to scan source files:", error);
-    sourceScanError.value = String(error);
+    sourceScanError.value = interpretError(error);
     sourceFiles.value = [];
     sourceTree.value = [];
   } finally {
@@ -814,6 +833,33 @@ async function copyPath(path: string) {
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/* 生成结果预览                                                               */
+/* -------------------------------------------------------------------------- */
+
+const previewOpen = ref(false);
+const previewPath = ref("");
+const previewContent = ref("");
+const previewLoading = ref(false);
+const previewError = ref<string | null>(null);
+
+const previewLines = computed(() => previewContent.value.split("\n"));
+
+async function previewFile(path: string) {
+  previewPath.value = path;
+  previewContent.value = "";
+  previewError.value = null;
+  previewOpen.value = true;
+  previewLoading.value = true;
+  try {
+    previewContent.value = await invoke<string>("read_text_file", { path });
+  } catch (error) {
+    previewError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    previewLoading.value = false;
+  }
+}
+
 async function copyLogs() {
   if (generationOutput.value.length === 0) return;
 
@@ -895,6 +941,7 @@ watch(
 
 onMounted(() => {
   void setupGenerationListeners();
+  window.addEventListener('testmate:focus-search', onFocusSearch);
 });
 
 onUnmounted(() => {
@@ -902,7 +949,13 @@ onUnmounted(() => {
   unlistenProgress?.();
   unlistenOutput?.();
   unlistenFinished?.();
+  window.removeEventListener('testmate:focus-search', onFocusSearch);
 });
+
+const sourceSearchInput = ref<HTMLInputElement | null>(null);
+function onFocusSearch() {
+  sourceSearchInput.value?.focus();
+}
 </script>
 
 <template>
@@ -1010,6 +1063,7 @@ onUnmounted(() => {
               />
               <input
                 v-model="sourceSearch"
+                ref="sourceSearchInput"
                 type="text"
                 :placeholder="t('generate.searchPlaceholder')"
                 :disabled="isGenerating"
@@ -1043,11 +1097,18 @@ onUnmounted(() => {
               v-else-if="sourceScanError"
               class="m-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700"
             >
-              {{ sourceScanError }}
+              {{ sourceScanError.message }}
+              <p v-if="sourceScanError.hint" class="mt-1 text-[11px] text-rose-600">
+                {{ sourceScanError.hint }}
+              </p>
             </div>
             <div v-else-if="sourceTree.length === 0" class="px-4 py-10 text-center">
               <div class="text-sm font-medium text-zinc-700">{{ t("generate.noSources") }}</div>
               <div class="mt-1 text-xs text-zinc-500">{{ t("generate.noSourcesDesc") }}</div>
+              <AppButton variant="secondary" size="sm" class="mt-4" :disabled="isGenerating" @click="scanSourceFiles">
+                <RefreshCw class="h-3.5 w-3.5" />
+                {{ t("common.refresh") }}
+              </AppButton>
             </div>
             <div v-else class="py-1">
               <TreeItem
@@ -1417,6 +1478,7 @@ onUnmounted(() => {
             :key="file.path"
             class="flex flex-wrap items-center gap-3 px-4 py-2.5 transition-colors hover:bg-zinc-50"
             @contextmenu.prevent="showResultMenu(file, $event)"
+            @dblclick="file.path ? openFile(file.path) : undefined"
           >
             <component
               :is="getGeneratedFileIcon(file.status)"
@@ -1436,6 +1498,15 @@ onUnmounted(() => {
               {{ t("generate.results.testCases", { count: file.testCaseCount }) }}
             </span>
             <div class="flex shrink-0 items-center gap-1">
+              <AppTooltip :content="t('generate.actions.preview')" position="top">
+                <button
+                  type="button"
+                  class="rounded-lg p-1.5 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
+                  @click="previewFile(file.path)"
+                >
+                  <Eye class="h-3.5 w-3.5" />
+                </button>
+              </AppTooltip>
               <AppTooltip :content="t('generate.actions.openFile')" position="top">
                 <button
                   type="button"
@@ -1501,5 +1572,44 @@ onUnmounted(() => {
       :open="!!resultMenu"
       @close="resultMenu = null"
     />
+
+    <!-- 生成测试预览弹窗 -->
+    <AppModal
+      v-model:open="previewOpen"
+      :title="t('generate.actions.preview')"
+      width="max-w-3xl"
+    >
+      <div v-if="previewPath" class="truncate pb-2 font-mono text-[10px] text-zinc-400">
+        {{ previewPath }}
+      </div>
+
+      <div v-if="previewLoading" class="flex items-center justify-center py-10 text-sm text-zinc-400">
+        <Loader2 class="mr-2 h-4 w-4 animate-spin" />
+        {{ t("generate.actions.previewLoading") }}
+      </div>
+
+      <div
+        v-else-if="previewError"
+        class="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700"
+      >
+        {{ previewError }}
+      </div>
+
+      <div v-else class="max-h-[60vh] overflow-auto rounded-lg border border-border">
+        <div
+          v-for="(line, i) in previewLines"
+          :key="i"
+          class="flex border-b border-zinc-100 last:border-b-0"
+          :class="i % 2 === 1 ? 'bg-zinc-50/50' : ''"
+        >
+          <span class="w-10 shrink-0 select-none border-r border-zinc-100 px-2 py-0.5 text-right font-mono text-[10px] text-zinc-300">
+            {{ i + 1 }}
+          </span>
+          <span class="min-w-0 flex-1 whitespace-pre px-3 py-0.5 font-mono text-[11px] leading-5 text-zinc-700">
+            {{ line }}
+          </span>
+        </div>
+      </div>
+    </AppModal>
   </div>
 </template>

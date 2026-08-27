@@ -29,10 +29,13 @@ import {
   Search,
   Square,
   Trash2,
+  WandSparkles,
   XCircle,
 } from "@lucide/vue";
 import { useProjectStore } from "../../../stores/projectStore";
+import { useUIStore } from "../../../stores/uiStore";
 import { parseArguments } from "../../../helper/execute";
+import { interpretError, type InterpretedError } from "../../../utils/errors";
 import { useI18n } from "vue-i18n";
 import AppModal from "../../../components/ui/AppModal.vue";
 import AppButton from "../../../components/ui/AppButton.vue";
@@ -49,6 +52,7 @@ import { notifyExecutionComplete } from "../../../composables/useNotifications";
 const route = useRoute();
 const router = useRouter();
 const projectStore = useProjectStore();
+const uiStore = useUIStore();
 const { t } = useI18n();
 
 const { setProgress: setTaskProgress, clear: clearTaskProgress } = useTaskbarProgress();
@@ -201,8 +205,8 @@ const testCases = ref<TestCase[]>([]);
 
 const isLoadingTests = ref(false);
 const isCollecting = ref(false);
-const testScanError = ref<string | null>(null);
-const collectError = ref<string | null>(null);
+const testScanError = ref<InterpretedError | null>(null);
+const collectError = ref<InterpretedError | null>(null);
 
 const testSearch = ref("");
 const resultFilter = ref<ResultFilter>("all");
@@ -697,7 +701,7 @@ async function scanTestFiles() {
   const projectPath = currentProject.value?.path;
 
   if (!projectPath) {
-    testScanError.value = t("execute.projectPathUnavailable");
+    testScanError.value = { message: t("execute.projectPathUnavailable") };
     return;
   }
 
@@ -710,7 +714,7 @@ async function scanTestFiles() {
     });
   } catch (error) {
     console.error("[Execute] Failed to scan test files:", error);
-    testScanError.value = String(error);
+    testScanError.value = interpretError(error);
     testFiles.value = [];
   } finally {
     isLoadingTests.value = false;
@@ -721,7 +725,7 @@ async function collectTestCases() {
   const projectPath = currentProject.value?.path;
 
   if (!projectPath) {
-    collectError.value = t("execute.projectPathUnavailable");
+    collectError.value = { message: t("execute.projectPathUnavailable") };
     return;
   }
 
@@ -748,7 +752,7 @@ async function collectTestCases() {
   } catch (error) {
     console.error("[Execute] collect_test_cases failed:", error);
 
-    collectError.value = String(error);
+    collectError.value = interpretError(error);
     testCases.value = [];
     selectedTestCases.value = [];
   } finally {
@@ -780,8 +784,28 @@ function setScope(scope: TestScope) {
   }
 }
 
-function toggleTest(testId: string) {
+let lastSelectedIndex: number | null = null;
+
+function toggleTest(testId: string, event?: MouseEvent) {
   if (isRunning.value) {
+    return;
+  }
+
+  const currentIndex = filteredTestCases.value.findIndex((t) => t.id === testId);
+
+  // Shift+Click：选中从上次点击到当前项之间的连续范围（并入当前选择）
+  if (event?.shiftKey && lastSelectedIndex !== null && currentIndex !== -1) {
+    const [start, end] = currentIndex >= lastSelectedIndex
+      ? [lastSelectedIndex, currentIndex]
+      : [currentIndex, lastSelectedIndex];
+    const rangeIds = filteredTestCases.value
+      .slice(start, end + 1)
+      .map((t) => t.id);
+    selectedTestCases.value = Array.from(
+      new Set([...selectedTestCases.value, ...rangeIds]),
+    );
+    lastSelectedIndex = currentIndex;
+    testScope.value = "selected";
     return;
   }
 
@@ -793,6 +817,7 @@ function toggleTest(testId: string) {
     selectedTestCases.value.splice(index, 1);
   }
 
+  lastSelectedIndex = currentIndex;
   testScope.value = "selected";
 }
 
@@ -1068,7 +1093,7 @@ async function saveExecutionToDb(payload: TestFinishedEvent) {
     const totalTests = payload.passed + payload.failed + payload.skipped;
     const executionStatus = payload.success ? "success" : "failed";
 
-    await invoke("save_execution_history", {
+    const executionId = await invoke<number>("save_execution_history", {
       projectId: currentProject.value.id,
       executionType: payload.executionType,
       regressionSuiteId: payload.regressionSuiteId,
@@ -1080,6 +1105,20 @@ async function saveExecutionToDb(payload: TestFinishedEvent) {
       skipped: payload.skipped,
       executionTime: payload.duration,
     });
+
+    // 保存单条结果明细（供历史详情查看失败原因等）
+    if (payload.results.length > 0) {
+      await invoke("save_execution_result_details", {
+        executionId,
+        results: payload.results.map((r) => ({
+          name: r.name,
+          file: r.file || null,
+          status: r.status,
+          duration: r.duration,
+          errorMessage: r.errorMessage,
+        })),
+      });
+    }
     console.log("[DB] ✅ Execution history saved successfully");
   } catch (error) {
     console.error("[DB] ❌ Failed to save execution history:", error);
@@ -1198,6 +1237,19 @@ function clearOutput() {
   showPytestOutput.value = false;
 }
 
+async function openResultFile(result: TestResult) {
+  const projectPath = currentProject.value?.path;
+  if (!projectPath || !result.file) return;
+  const full = result.file.startsWith("/") || /^[A-Za-z]:/.test(result.file)
+    ? result.file
+    : `${projectPath}/${result.file}`;
+  try {
+    await invoke("open_file", { path: full });
+  } catch (error) {
+    console.error("[Execute] open_file failed:", error);
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Watchers / lifecycle                                                       */
 /* -------------------------------------------------------------------------- */
@@ -1216,6 +1268,26 @@ watch(
     testSearch.value = "";
 
     await Promise.all([refreshTests(), loadSuites()]);
+
+    // 消费"历史详情一键重跑失败用例"：选中失败用例并自动运行
+    const pendingProject = uiStore.pendingRerunProjectId;
+    const pendingIds = uiStore.pendingRerunTestIds;
+    if (pendingProject !== null && pendingProject === project.id && pendingIds.length > 0) {
+      const matched = testCases.value.filter((t) =>
+        pendingIds.some(
+          (pid) =>
+            t.id === pid ||
+            t.id.endsWith(`::${pid.split("::").pop()}`),
+        ),
+      );
+      if (matched.length > 0) {
+        selectedTestCases.value = matched.map((t) => t.id);
+        testScope.value = "selected";
+        await nextTick();
+        void runTests();
+      }
+      uiStore.clearPendingRerun();
+    }
   },
   {
     immediate: true,
@@ -1233,6 +1305,7 @@ watch(
 
 onMounted(() => {
   void setupTestListeners();
+  window.addEventListener('testmate:focus-search', onFocusSearch);
 });
 
 // Ctrl+Enter 快速运行当前选中的测试
@@ -1249,7 +1322,13 @@ onUnmounted(() => {
   unlistenStarted?.();
   unlistenOutput?.();
   unlistenFinished?.();
+  window.removeEventListener('testmate:focus-search', onFocusSearch);
 });
+
+const testSearchInput = ref<HTMLInputElement | null>(null);
+function onFocusSearch() {
+  testSearchInput.value?.focus();
+}
 </script>
 
 <template>
@@ -1350,6 +1429,7 @@ onUnmounted(() => {
               />
               <input
                 v-model="testSearch"
+                ref="testSearchInput"
                 type="text"
                 :placeholder="t('execute.searchPlaceholder')"
                 :disabled="isRunning"
@@ -1384,11 +1464,28 @@ onUnmounted(() => {
               v-else-if="collectError"
               class="m-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700"
             >
-              {{ collectError }}
+              {{ collectError.message }}
+              <p v-if="collectError.hint" class="mt-1 text-[11px] text-rose-600">
+                {{ collectError.hint }}
+              </p>
             </div>
             <div v-else-if="testCases.length === 0" class="px-4 py-8 text-center">
               <div class="text-sm font-medium text-zinc-700">{{ t("execute.noTestCases") }}</div>
               <div class="mt-1 text-xs text-zinc-500">{{ t("execute.noTestCasesDesc") }}</div>
+              <div class="mt-4 flex items-center justify-center gap-2">
+                <AppButton variant="secondary" size="sm" :disabled="isRunning" @click="refreshTests">
+                  <RefreshCw class="h-3.5 w-3.5" />
+                  {{ t("common.refresh") }}
+                </AppButton>
+                <AppButton
+                  variant="primary"
+                  size="sm"
+                  @click="router.push({ name: 'ProjectGenerate', params: { id: projectId } })"
+                >
+                  <WandSparkles class="h-3.5 w-3.5" />
+                  {{ t("execute.goGenerate") }}
+                </AppButton>
+              </div>
             </div>
             <div v-else-if="filteredTestCases.length === 0" class="px-4 py-8 text-center text-sm text-zinc-500">
               {{ t("execute.noSearchResults") }}
@@ -1399,7 +1496,7 @@ onUnmounted(() => {
               type="button"
               :disabled="isRunning"
               class="flex w-full items-center gap-3 border-b border-border px-3 py-2 text-left transition last:border-b-0 hover:bg-zinc-50 disabled:cursor-not-allowed"
-              @click="toggleTest(test.id)"
+              @click="toggleTest(test.id, $event)"
               @contextmenu.prevent="showTestCaseMenu(test, $event)"
             >
               <span
@@ -1485,7 +1582,10 @@ onUnmounted(() => {
           v-if="testScanError"
           class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-700"
         >
-          {{ testScanError }}
+          {{ testScanError.message }}
+          <p v-if="testScanError.hint" class="mt-1 text-[11px] text-amber-600">
+            {{ testScanError.hint }}
+          </p>
         </div>
 
         <!-- 底部：范围摘要 + 参数预览 + 主操作 -->
@@ -1762,7 +1862,7 @@ onUnmounted(() => {
             </div>
 
             <div class="mt-1 divide-y divide-border">
-              <div v-for="result in filteredResults" :key="result.id" class="py-2.5" @contextmenu.prevent="showResultMenu(result, $event)">
+              <div v-for="result in filteredResults" :key="result.id" class="py-2.5" @contextmenu.prevent="showResultMenu(result, $event)" @dblclick="openResultFile(result)">
                 <div class="flex items-center gap-3">
                   <component
                     :is="getResultIcon(result.status)"

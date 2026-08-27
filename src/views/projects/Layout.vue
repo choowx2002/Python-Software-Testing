@@ -7,7 +7,7 @@
  *  - 键盘快捷键：Ctrl+1~5 切换标签页，Ctrl+B 切换侧边栏
  *  - 窗口标题动态更新
  */
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   ArrowLeft,
@@ -21,6 +21,7 @@ import {
   WandSparkles,
 } from "@lucide/vue";
 import { useProjectStore, type Project } from "../../stores/projectStore";
+import { useUIStore } from "../../stores/uiStore";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "vue-i18n";
 import AppSidebar from "../../components/AppSidebar.vue";
@@ -41,6 +42,7 @@ type ProjectRouteName =
 const route = useRoute();
 const router = useRouter();
 const projectStore = useProjectStore();
+const uiStore = useUIStore();
 const { t } = useI18n();
 
 // Window title management
@@ -234,8 +236,31 @@ watch(
   { immediate: true },
 );
 
+// 记住每个项目上次停留的标签页
+watch(
+  () => route.name,
+  (name) => {
+    if (Number.isNaN(projectId.value)) return;
+    const tab = String(name);
+    const tabs = new Set(['ProjectOverview', 'ProjectGenerate', 'ProjectExecute', 'ProjectCoverage', 'ProjectHistory']);
+    if (tabs.has(tab)) {
+      uiStore.setLastTab(projectId.value, tab);
+    }
+  },
+  { immediate: true },
+);
+
+function onRefreshEvent() {
+  void refreshProject();
+}
+
 onMounted(() => {
   ensureProjectLoaded();
+  window.addEventListener('testmate:refresh', onRefreshEvent);
+});
+
+onUnmounted(() => {
+  window.removeEventListener('testmate:refresh', onRefreshEvent);
 });
 </script>
 

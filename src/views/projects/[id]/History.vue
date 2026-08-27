@@ -9,10 +9,16 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "vue-i18n";
-import { Copy, Gauge, History, Loader2, Play, WandSparkles } from "@lucide/vue";
+import { Copy, Download, ExternalLink, Gauge, GitCompare, History, Loader2, Play, WandSparkles } from "@lucide/vue";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useProjectStore } from "../../../stores/projectStore";
+import { useUIStore } from "../../../stores/uiStore";
 import StatusPill from "../../../components/ui/StatusPill.vue";
+import AppTooltip from "../../../components/ui/AppTooltip.vue";
 import AppContextMenu from "../../../components/ui/AppContextMenu.vue";
+import AppModal from "../../../components/ui/AppModal.vue";
+import AppButton from "../../../components/ui/AppButton.vue";
+import HistoryDetailContent from "../../../components/HistoryDetailContent.vue";
 import CombinedTrendChart from "../../../components/ui/CombinedTrendChart.vue";
 
 interface ExecutionHistoryRow {
@@ -64,6 +70,8 @@ interface TimelineEntry {
   hm: string;
   pill: string;
   statusLabel: string;
+  /** 可选的状态解释（如 coverage warning 说明"测试有失败但覆盖率已生成"） */
+  explain?: string;
   summary: string;
   duration: string;
   /** 覆盖率条目：与上一次覆盖率运行的差值（%），无则 null */
@@ -73,6 +81,7 @@ interface TimelineEntry {
 const route = useRoute();
 const router = useRouter();
 const projectStore = useProjectStore();
+const uiStore = useUIStore();
 const { t } = useI18n();
 
 /* 右键菜单：时间线条目 */
@@ -88,7 +97,7 @@ const timelineMenuItems = computed(() => {
     {
       label: t("contextmenu.viewDetails"),
       icon: History,
-      action: () => void router.push({ name: "ProjectHistory", params: { id: projectId.value } }),
+      action: () => openDetailFromEntry(entry),
     },
   ];
 });
@@ -98,6 +107,129 @@ async function copyText(text: string) {
   } catch (error) {
     console.error("[History] copy failed:", error);
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* 历史导出 JSON / CSV                                                 */
+/* ------------------------------------------------------------------ */
+const exportBusy = ref(false);
+const exportMsg = ref<string | null>(null);
+
+function buildHistoryJson(): string {
+  return JSON.stringify(
+    {
+      executions: executions.value,
+      generations: generations.value,
+      coverages: coverages.value,
+    },
+    null,
+    2,
+  );
+}
+
+function buildHistoryCsv(): string {
+  const esc = (v: unknown) => {
+    const s = v == null ? "" : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const rows: string[] = ["type,id,executed_at,status,detail"];
+  for (const e of executions.value) {
+    rows.push(
+      ["execute", e.id, e.executedAt, e.executionStatus, `${e.passed} passed, ${e.failed} failed, ${e.skipped} skipped`].map(esc).join(","),
+    );
+  }
+  for (const g of generations.value) {
+    rows.push(
+      ["generate", g.id, g.executedAt, g.generationStatus, `${g.generatedFiles} of ${g.totalFiles} files`].map(esc).join(","),
+    );
+  }
+  for (const c of coverages.value) {
+    rows.push(
+      ["coverage", c.id, c.executedAt, c.coverageStatus, `${c.percentCovered}% · ${c.coveredStatements}/${c.totalStatements}`].map(esc).join(","),
+    );
+  }
+  return rows.join("\n");
+}
+
+async function exportHistory(format: "json" | "csv") {
+  if (exportBusy.value) return;
+  exportBusy.value = true;
+  exportMsg.value = null;
+  try {
+    const content = format === "json" ? buildHistoryJson() : buildHistoryCsv();
+    const fileBase = `history_${projectId.value}`;
+    const saved = await invoke<string>("save_text_file", {
+      defaultFileName: format === "json" ? `${fileBase}.json` : `${fileBase}.csv`,
+      content,
+      filterName: format === "json" ? "JSON" : "CSV",
+      extensions: format === "json" ? ["json"] : ["csv"],
+    });
+    exportMsg.value = t("history.exportSaved", { path: saved });
+  } catch (e) {
+    exportMsg.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    exportBusy.value = false;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 详情弹窗 + 独立窗口                                                  */
+/* ------------------------------------------------------------------ */
+type DetailType = "execute" | "coverage" | "generation";
+
+const detailOpen = ref(false);
+const detailType = ref<DetailType>("execute");
+const detailId = ref<number | null>(null);
+/** 覆盖率对比：是否显示 vs 上一次 */
+const detailCompare = ref(false);
+
+/** 由时间线条目解析出类型 + id 并打开详情弹窗 */
+function openDetailFromEntry(entry: TimelineEntry) {
+  const type: DetailType = entry.type === "generate" ? "generation" : entry.type;
+  const id = Number(entry.key.slice(2));
+  if (Number.isNaN(id)) return;
+  detailType.value = type;
+  detailId.value = id;
+  detailCompare.value = false;
+  detailOpen.value = true;
+}
+
+const detailTitle = computed(() => {
+  switch (detailType.value) {
+    case "execute":
+      return t("history.detail.titleExecute");
+    case "coverage":
+      return t("history.detail.titleCoverage");
+    case "generation":
+      return t("history.detail.titleGeneration");
+  }
+});
+
+/** 覆盖率对比的上一次记录 id（当前记录之前最近一条，无则 null） */
+const detailCompareId = computed<number | null>(() => {
+  if (!detailCompare.value || detailId.value === null) return null;
+  const prev = coverages.value.find((c) => c.id < detailId.value!);
+  return prev ? prev.id : null;
+});
+
+/** 一键重跑失败用例：跳到 Execute 页并自动选中运行 */
+function onRerunFailed(ids: string[]) {
+  if (ids.length === 0) return;
+  uiStore.setPendingRerun(projectId.value, ids);
+  detailOpen.value = false;
+  void router.push({ name: "ProjectExecute", params: { id: projectId.value } });
+}
+
+async function openInNewWindow() {
+  if (detailId.value === null) return;
+  const url = `/?detail=${detailType.value}&id=${detailId.value}`;
+  const base = window.location.origin;
+  const absUrl = `${base}${url}`;
+  const existing = await WebviewWindow.getByLabel("detail");
+  if (existing) {
+    await existing.close();
+  }
+  await new WebviewWindow("detail", { url: absUrl, title: "Testmate — 详情", width: 760, height: 640 });
 }
 
 const projectId = computed(() => Number(route.params.id));
@@ -208,16 +340,18 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
 
   coverages.value.forEach((r) => {
     const ok = r.coverageStatus === "success";
+    const isWarning = r.coverageStatus === "warning";
     raws.push({
       key: `c-${r.id}`,
       type: "coverage",
       time: r.executedAt,
-      pill: ok ? "completed" : r.coverageStatus === "warning" ? "Warning" : "Failed",
+      pill: ok ? "completed" : isWarning ? "Warning" : "Failed",
       statusLabel: ok
         ? t("history.statusSuccess")
-        : r.coverageStatus === "warning"
+        : isWarning
           ? t("layout.statusWarning")
           : t("history.statusFailed"),
+      explain: isWarning ? t("history.coverageWarningHint") : undefined,
       summary: `${r.percentCovered.toFixed(1)}% · ${t("history.covStatements", {
         covered: r.coveredStatements,
         total: r.totalStatements,
@@ -374,24 +508,49 @@ const latestPassRate = computed(() => {
         </div>
       </div>
 
-      <!-- 视图切换：Timeline / Charts -->
-      <div class="inline-flex shrink-0 rounded-lg border border-border bg-zinc-50 p-0.5">
-        <button
-          v-for="mode in (['timeline', 'charts'] as ViewMode[])"
-          :key="mode"
-          type="button"
-          class="rounded-md px-3 py-1.5 text-xs font-medium transition"
-          :class="
-            viewMode === mode
-              ? 'bg-white text-zinc-900 shadow-sm'
-              : 'text-zinc-500 hover:text-zinc-800'
-          "
-          @click="viewMode = mode"
-        >
-          {{ mode === "timeline" ? t("history.viewTimeline") : t("history.viewCharts") }}
-        </button>
+      <!-- 导出 + 视图切换 -->
+      <div class="flex shrink-0 items-center gap-2">
+        <AppTooltip :content="t('history.exportJson')" position="top">
+          <AppButton variant="secondary" size="sm" :loading="exportBusy" @click="exportHistory('json')">
+            <Download class="h-3.5 w-3.5" />
+            {{ t("history.exportJson") }}
+          </AppButton>
+        </AppTooltip>
+        <AppButton variant="secondary" size="sm" :loading="exportBusy" @click="exportHistory('csv')">
+          <Download class="h-3.5 w-3.5" />
+          {{ t("history.exportCsv") }}
+        </AppButton>
+        <div class="inline-flex shrink-0 rounded-lg border border-border bg-zinc-50 p-0.5">
+          <button
+            v-for="mode in (['timeline', 'charts'] as ViewMode[])"
+            :key="mode"
+            type="button"
+            class="rounded-md px-3 py-1.5 text-xs font-medium transition"
+            :class="
+              viewMode === mode
+                ? 'bg-white text-zinc-900 shadow-sm'
+                : 'text-zinc-500 hover:text-zinc-800'
+            "
+            @click="viewMode = mode"
+          >
+            {{ mode === "timeline" ? t("history.viewTimeline") : t("history.viewCharts") }}
+          </button>
+        </div>
       </div>
     </header>
+
+    <!-- 导出结果提示 -->
+    <div
+      v-if="exportMsg"
+      class="px-5 pt-3"
+    >
+      <div
+        class="rounded-lg border px-3.5 py-2 text-xs"
+        :class="exportMsg.startsWith(t('history.exportSaved', { path: '' }).trim()) ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-rose-200 bg-rose-50 text-rose-700'"
+      >
+        {{ exportMsg }}
+      </div>
+    </div>
 
     <!-- 加载中 -->
     <div v-if="loading" class="flex items-center justify-center py-16 text-sm text-zinc-400">
@@ -456,6 +615,7 @@ const latestPassRate = computed(() => {
                   v-for="entry in group.entries"
                   :key="entry.key"
                   class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg px-2 py-1.5 transition hover:bg-zinc-50"
+                  @click="openDetailFromEntry(entry)"
                   @contextmenu.prevent="showTimelineMenu(entry, $event)"
                 >
                   <!-- 类型标识 -->
@@ -474,7 +634,9 @@ const latestPassRate = computed(() => {
                     {{ entryTypeLabel(entry.type) }}
                   </span>
 
-                  <StatusPill :status="entry.pill" :label="entry.statusLabel" />
+                  <AppTooltip :content="entry.explain ?? entry.statusLabel" position="top">
+                    <StatusPill :status="entry.pill" :label="entry.statusLabel" />
+                  </AppTooltip>
 
                   <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-700">
                     {{ entry.summary }}
@@ -544,5 +706,39 @@ const latestPassRate = computed(() => {
       :open="!!timelineMenu"
       @close="timelineMenu = null"
     />
+
+    <!-- 历史详情弹窗（居中） -->
+    <AppModal
+      v-model:open="detailOpen"
+      :title="detailTitle"
+      width="max-w-2xl"
+    >
+      <HistoryDetailContent
+        v-if="detailId !== null"
+        :type="detailType"
+        :id="detailId"
+        :compare-id="detailCompareId"
+        @rerun-failed="onRerunFailed"
+      />
+
+      <template #footer>
+        <!-- 覆盖率：对比上一次 -->
+        <AppButton
+          v-if="detailType === 'coverage' && detailCompareId !== null"
+          variant="secondary"
+          @click="detailCompare = !detailCompare"
+        >
+          <GitCompare class="h-4 w-4" />
+          {{ detailCompare ? t("history.detail.hideCompare") : t("history.detail.comparePrev") }}
+        </AppButton>
+        <AppButton variant="secondary" @click="openInNewWindow">
+          <ExternalLink class="h-4 w-4" />
+          {{ t("history.detail.openInNewWindow") }}
+        </AppButton>
+        <AppButton variant="ghost" @click="detailOpen = false">
+          {{ t("common.close") }}
+        </AppButton>
+      </template>
+    </AppModal>
   </div>
 </template>

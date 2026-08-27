@@ -27,9 +27,11 @@ import {
   Play,
   RefreshCw,
   Search,
+  WandSparkles,
 } from "@lucide/vue";
 import { useProjectStore } from "../../../stores/projectStore";
 import TreeItem from "../../../components/TreeItem.vue";
+import { interpretError, type InterpretedError } from "../../../utils/errors";
 import { useI18n } from "vue-i18n";
 import AppButton from "../../../components/ui/AppButton.vue";
 import AppContextMenu from "../../../components/ui/AppContextMenu.vue";
@@ -188,7 +190,7 @@ const selectedTestFiles = ref<string[]>([]);
 
 const isLoadingSources = ref(false);
 const isLoadingTests = ref(false);
-const scanError = ref<string | null>(null);
+const scanError = ref<InterpretedError | null>(null);
 
 const coverageInstalled = ref<boolean | null>(null);
 const checkingCoverage = ref(false);
@@ -312,7 +314,7 @@ const coverageOutput = ref<CoverageOutputEvent[]>([]);
 const showCoverageLog = ref(false);
 const logContainer = ref<HTMLElement | null>(null);
 
-const errorMessage = ref<string | null>(null);
+const errorMessage = ref<InterpretedError | null>(null);
 
 const exporting = ref<"json" | "csv" | null>(null);
 const exportMessage = ref<string | null>(null);
@@ -790,6 +792,9 @@ async function setupCoverageListeners() {
           coveredStatements: event.payload.summary?.coveredStatements ?? 0,
           duration: event.payload.duration,
           command: event.payload.command || null,
+          filesJson: event.payload.summary
+            ? JSON.stringify(event.payload.summary.files)
+            : null,
         }).catch((e) => console.error("[Coverage] save history failed:", e));
       }
     },
@@ -798,7 +803,7 @@ async function setupCoverageListeners() {
   unlistenError = await listen<CoverageErrorEvent>(
     "coverage-error",
     (event) => {
-      errorMessage.value = event.payload.message;
+      errorMessage.value = interpretError(event.payload.message);
 
       coverageOutput.value.push({
         runId: event.payload.runId,
@@ -834,7 +839,7 @@ async function scanSourceFiles() {
     sourceTree.value = buildSourceTree(sourceFiles.value);
   } catch (error) {
     console.error("[Coverage] Failed to scan source files:", error);
-    scanError.value = String(error);
+    scanError.value = interpretError(error);
     sourceFiles.value = [];
     sourceTree.value = [];
   } finally {
@@ -965,11 +970,8 @@ async function runCoverage() {
 
     const rawMsg = error instanceof Error ? error.message : String(error);
 
-    // “No data to report”：所选源文件没有被本次运行的测试导入 →
-    // 换成带解释的提示，而非生硬的原始报错
-    errorMessage.value = /No data to report/i.test(rawMsg)
-      ? t("coverage.noDataHint")
-      : rawMsg;
+    // 统一转为带解释的友好提示（含 "No data to report" 等场景）
+    errorMessage.value = interpretError(rawMsg);
 
     coverageOutput.value.push({
       runId: currentRunId.value ?? "local",
@@ -1103,6 +1105,19 @@ async function openInFileManager() {
   }
 }
 
+async function openSourceFile(file: FileCoverage) {
+  const projectPath = currentProject.value?.path;
+  if (!projectPath || !file.path) return;
+  const full = file.path.startsWith("/") || /^[A-Za-z]:/.test(file.path)
+    ? file.path
+    : `${projectPath}/${file.path}`;
+  try {
+    await invoke("open_file", { path: full });
+  } catch (error) {
+    console.error("[Coverage] open_file failed:", error);
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Logs                                                                       */
 /* -------------------------------------------------------------------------- */
@@ -1174,6 +1189,7 @@ watch(
 
 onMounted(() => {
   void setupCoverageListeners();
+  window.addEventListener('testmate:focus-search', onFocusSearch);
 });
 
 onUnmounted(() => {
@@ -1181,7 +1197,13 @@ onUnmounted(() => {
   unlistenOutput?.();
   unlistenFinished?.();
   unlistenError?.();
+  window.removeEventListener('testmate:focus-search', onFocusSearch);
 });
+
+const sourceSearchInput = ref<HTMLInputElement | null>(null);
+function onFocusSearch() {
+  sourceSearchInput.value?.focus();
+}
 </script>
 
 <template>
@@ -1247,6 +1269,7 @@ onUnmounted(() => {
                 />
                 <input
                   v-model="sourceSearch"
+                  ref="sourceSearchInput"
                   type="text"
                   :placeholder="t('coverage.searchPlaceholder')"
                   :disabled="isRunning"
@@ -1276,8 +1299,23 @@ onUnmounted(() => {
                 <Loader2 class="mx-auto mb-2 h-5 w-5 animate-spin" />
                 {{ t("coverage.scanningSources") }}
               </div>
+              <div
+                v-else-if="scanError"
+                class="m-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700"
+              >
+                {{ scanError.message }}
+                <p v-if="scanError.hint" class="mt-1 text-[11px] text-rose-600">
+                  {{ scanError.hint }}
+                </p>
+              </div>
               <div v-else-if="sourceTree.length === 0" class="px-4 py-8 text-center text-sm text-zinc-500">
                 {{ t("coverage.noSources") }}
+                <div class="mt-3 flex items-center justify-center gap-2">
+                  <AppButton variant="secondary" size="sm" :disabled="isRunning" @click="scanSourceFiles">
+                    <RefreshCw class="h-3.5 w-3.5" />
+                    {{ t("common.refresh") }}
+                  </AppButton>
+                </div>
               </div>
               <div v-else class="py-1">
                 <TreeItem
@@ -1344,6 +1382,20 @@ onUnmounted(() => {
               </div>
               <div v-else-if="testFiles.length === 0" class="px-4 py-8 text-center text-sm text-zinc-500">
                 {{ t("coverage.noTestFiles") }}
+                <div class="mt-3 flex items-center justify-center gap-2">
+                  <AppButton variant="secondary" size="sm" :disabled="isRunning" @click="scanTestFiles">
+                    <RefreshCw class="h-3.5 w-3.5" />
+                    {{ t("common.refresh") }}
+                  </AppButton>
+                  <AppButton
+                    variant="primary"
+                    size="sm"
+                    @click="router.push({ name: 'ProjectGenerate', params: { id: projectId } })"
+                  >
+                    <WandSparkles class="h-3.5 w-3.5" />
+                    {{ t("coverage.goGenerate") }}
+                  </AppButton>
+                </div>
               </div>
               <button
                 v-for="file in testFiles"
@@ -1427,7 +1479,10 @@ onUnmounted(() => {
       v-if="errorMessage"
       class="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700"
     >
-      {{ errorMessage }}
+      {{ errorMessage.message }}
+      <p v-if="errorMessage.hint" class="mt-1 text-[11px] text-rose-600">
+        {{ errorMessage.hint }}
+      </p>
     </div>
 
     <!-- ══════════ 结果区 ══════════ -->
@@ -1535,6 +1590,7 @@ onUnmounted(() => {
               class="flex w-full items-center gap-3 px-4 py-2.5 text-left transition hover:bg-zinc-50 disabled:cursor-not-allowed"
               @click="toggleDetail(file.path)"
               @contextmenu.prevent="showFileMenu(file, $event)"
+              @dblclick="openSourceFile(file)"
             >
               <FileCode2 class="h-4 w-4 shrink-0 text-zinc-400" />
               <span class="min-w-0 flex-1">

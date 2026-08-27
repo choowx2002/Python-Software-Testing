@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
@@ -113,12 +113,40 @@ const INIT_SQL: &str = "
       covered_statements INTEGER NOT NULL DEFAULT 0,
       duration REAL NOT NULL DEFAULT 0,
       command TEXT,
+      files_json TEXT,
       executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
 
     CREATE INDEX IF NOT EXISTS idx_gen_history_project ON generation_history(project_id);
     CREATE INDEX IF NOT EXISTS idx_cov_history_project ON coverage_history(project_id);
+
+    -- 7. Execution Result Details Table（单次执行中每条测试用例的结果明细）
+    CREATE TABLE IF NOT EXISTS execution_result_details (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      execution_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      file TEXT,
+      status TEXT NOT NULL,
+      duration REAL NOT NULL DEFAULT 0,
+      error_message TEXT,
+      FOREIGN KEY (execution_id) REFERENCES test_execution_history(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_exec_result_detail ON execution_result_details(execution_id);
+
+    -- 8. Generation File Details Table（单次生成产生的测试文件明细）
+    CREATE TABLE IF NOT EXISTS generation_file_details (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      generation_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      relative_path TEXT,
+      test_case_count INTEGER NOT NULL DEFAULT 0,
+      status TEXT,
+      FOREIGN KEY (generation_id) REFERENCES generation_history(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_gen_file_detail ON generation_file_details(generation_id);
 ";
 
 /// 初始化数据库表结构（幂等）。
@@ -146,6 +174,21 @@ pub async fn init(app: &AppHandle) -> Result<(), String> {
         .execute(&db)
         .await
         .map_err(|e| format!("Failed to initialize database tables: {}", e))?;
+
+    // 迁移：coverage_history 增加 files_json 列（历史版本无此列）
+    let cols = sqlx::query("PRAGMA table_info(coverage_history)")
+        .fetch_all(&db)
+        .await
+        .map_err(|e| format!("Failed to inspect coverage_history columns: {}", e))?;
+    let has_files_json = cols
+        .iter()
+        .any(|row| row.try_get::<String, _>("name").unwrap_or_default() == "files_json");
+    if !has_files_json {
+        sqlx::query("ALTER TABLE coverage_history ADD COLUMN files_json TEXT")
+            .execute(&db)
+            .await
+            .map_err(|e| format!("Failed to add files_json column: {}", e))?;
+    }
 
     Ok(())
 }
@@ -280,6 +323,26 @@ pub async fn update_project_interpreter(
     Ok(())
 }
 
+/// 读取项目的路径与已存的解释器路径（用于启动校验）
+pub async fn get_project_interpreter(
+    app: &AppHandle,
+    project_id: i64,
+) -> Result<(String, Option<String>), String> {
+    let db = pool(app).await?;
+    let row = sqlx::query("SELECT project_path, interpreter_path FROM projects WHERE id = ?")
+        .bind(project_id)
+        .fetch_optional(&db)
+        .await
+        .map_err(|e| format!("Failed to load project interpreter: {}", e))?;
+    let Some(row) = row else {
+        return Err(format!("Project not found: {}", project_id));
+    };
+    let project_path: String = row.try_get("project_path").map_err(|e| e.to_string())?;
+    let interpreter_path: Option<String> =
+        row.try_get("interpreter_path").map_err(|e| e.to_string())?;
+    Ok((project_path, interpreter_path))
+}
+
 /// 删除项目及其关联数据（coverage_results 无级联外键，需显式清理）
 pub async fn delete_project(app: &AppHandle, project_id: i64) -> Result<(), String> {
     let db = pool(app).await?;
@@ -298,6 +361,14 @@ pub async fn delete_project(app: &AppHandle, project_id: i64) -> Result<(), Stri
         .execute(&mut *tx)
         .await
         .map_err(|e| format!("Failed to delete execution history: {}", e))?;
+    sqlx::query(
+        "DELETE FROM execution_result_details
+         WHERE execution_id IN (SELECT id FROM test_execution_history WHERE project_id = ?)",
+    )
+    .bind(project_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("Failed to delete execution result details: {}", e))?;
     sqlx::query("DELETE FROM regression_suites WHERE project_id = ?")
         .bind(project_id)
         .execute(&mut *tx)
@@ -308,6 +379,14 @@ pub async fn delete_project(app: &AppHandle, project_id: i64) -> Result<(), Stri
         .execute(&mut *tx)
         .await
         .map_err(|e| format!("Failed to delete generation history: {}", e))?;
+    sqlx::query(
+        "DELETE FROM generation_file_details
+         WHERE generation_id IN (SELECT id FROM generation_history WHERE project_id = ?)",
+    )
+    .bind(project_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("Failed to delete generation file details: {}", e))?;
     sqlx::query("DELETE FROM coverage_history WHERE project_id = ?")
         .bind(project_id)
         .execute(&mut *tx)
@@ -608,13 +687,14 @@ pub async fn save_coverage_history(
     covered_statements: i64,
     duration: f64,
     command: Option<String>,
+    files_json: Option<String>,
 ) -> Result<i64, String> {
     let db = pool(app).await?;
     let result = sqlx::query(
         "INSERT INTO coverage_history
            (project_id, coverage_status, percent_covered, total_statements,
-            covered_statements, duration, command)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+            covered_statements, duration, command, files_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(project_id)
     .bind(coverage_status)
@@ -623,6 +703,7 @@ pub async fn save_coverage_history(
     .bind(covered_statements)
     .bind(duration)
     .bind(command)
+    .bind(files_json)
     .execute(&db)
     .await
     .map_err(|e| format!("Failed to save coverage history: {}", e))?;
@@ -665,6 +746,214 @@ pub async fn list_coverage_history(
             })
         })
         .collect()
+}
+
+// ============================================
+// Execution / Generation 明细（历史详情）
+// ============================================
+
+/// 前端提交的单条测试结果（保存执行明细用）
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionDetailPayload {
+    pub name: String,
+    pub file: Option<String>,
+    pub status: String,
+    pub duration: f64,
+    pub error_message: Option<String>,
+}
+
+/// 执行结果明细行（返回前端）
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionResultDetailRow {
+    pub id: i64,
+    pub execution_id: i64,
+    pub name: String,
+    pub file: Option<String>,
+    pub status: String,
+    pub duration: f64,
+    pub error_message: Option<String>,
+}
+
+/// 前端提交的单条生成文件（保存生成明细用）
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerationFilePayload {
+    pub name: String,
+    pub relative_path: Option<String>,
+    pub test_case_count: u32,
+    pub status: Option<String>,
+}
+
+/// 生成文件明细行（返回前端）
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerationFileRow {
+    pub id: i64,
+    pub generation_id: i64,
+    pub name: String,
+    pub relative_path: Option<String>,
+    pub test_case_count: i64,
+    pub status: Option<String>,
+}
+
+/// 批量写入一次执行的所有测试结果明细
+pub async fn save_execution_result_details(
+    app: &AppHandle,
+    execution_id: i64,
+    results: &[ExecutionDetailPayload],
+) -> Result<(), String> {
+    let db = pool(app).await?;
+    let mut tx = db
+        .begin()
+        .await
+        .map_err(|e| format!("Failed to begin transaction: {}", e))?;
+
+    for r in results {
+        sqlx::query(
+            "INSERT INTO execution_result_details
+               (execution_id, name, file, status, duration, error_message)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(execution_id)
+        .bind(&r.name)
+        .bind(&r.file)
+        .bind(&r.status)
+        .bind(r.duration)
+        .bind(&r.error_message)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to save execution result detail: {}", e))?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| format!("Failed to commit execution details: {}", e))?;
+    Ok(())
+}
+
+/// 读取一次执行的所有测试结果明细
+pub async fn list_execution_result_details(
+    app: &AppHandle,
+    execution_id: i64,
+) -> Result<Vec<ExecutionResultDetailRow>, String> {
+    let db = pool(app).await?;
+    let rows = sqlx::query(
+        "SELECT id, execution_id, name, file, status, duration, error_message
+         FROM execution_result_details
+         WHERE execution_id = ?",
+    )
+    .bind(execution_id)
+    .fetch_all(&db)
+    .await
+    .map_err(|e| format!("Failed to list execution result details: {}", e))?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(ExecutionResultDetailRow {
+                id: row.try_get("id").map_err(|e| e.to_string())?,
+                execution_id: row.try_get("execution_id").map_err(|e| e.to_string())?,
+                name: row.try_get("name").map_err(|e| e.to_string())?,
+                file: row.try_get("file").map_err(|e| e.to_string())?,
+                status: row.try_get("status").map_err(|e| e.to_string())?,
+                duration: row.try_get("duration").map_err(|e| e.to_string())?,
+                error_message: row.try_get("error_message").map_err(|e| e.to_string())?,
+            })
+        })
+        .collect()
+}
+
+/// 批量写入一次生成产生的所有测试文件明细
+pub async fn save_generation_file_details(
+    app: &AppHandle,
+    generation_id: i64,
+    files: &[GenerationFilePayload],
+) -> Result<(), String> {
+    let db = pool(app).await?;
+    let mut tx = db
+        .begin()
+        .await
+        .map_err(|e| format!("Failed to begin transaction: {}", e))?;
+
+    for f in files {
+        sqlx::query(
+            "INSERT INTO generation_file_details
+               (generation_id, name, relative_path, test_case_count, status)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(generation_id)
+        .bind(&f.name)
+        .bind(&f.relative_path)
+        .bind(f.test_case_count as i64)
+        .bind(&f.status)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to save generation file detail: {}", e))?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| format!("Failed to commit generation details: {}", e))?;
+    Ok(())
+}
+
+/// 读取一次生成的所有测试文件明细
+pub async fn list_generation_file_details(
+    app: &AppHandle,
+    generation_id: i64,
+) -> Result<Vec<GenerationFileRow>, String> {
+    let db = pool(app).await?;
+    let rows = sqlx::query(
+        "SELECT id, generation_id, name, relative_path, test_case_count, status
+         FROM generation_file_details
+         WHERE generation_id = ?",
+    )
+    .bind(generation_id)
+    .fetch_all(&db)
+    .await
+    .map_err(|e| format!("Failed to list generation file details: {}", e))?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(GenerationFileRow {
+                id: row.try_get("id").map_err(|e| e.to_string())?,
+                generation_id: row.try_get("generation_id").map_err(|e| e.to_string())?,
+                name: row.try_get("name").map_err(|e| e.to_string())?,
+                relative_path: row.try_get("relative_path").map_err(|e| e.to_string())?,
+                test_case_count: row.try_get("test_case_count").map_err(|e| e.to_string())?,
+                status: row.try_get("status").map_err(|e| e.to_string())?,
+            })
+        })
+        .collect()
+}
+
+/// 读取一次覆盖率运行的文件级明细（来自 files_json 列）
+pub async fn get_coverage_history_files(
+    app: &AppHandle,
+    history_id: i64,
+) -> Result<Option<Vec<crate::commands::coverage::FileCoverage>>, String> {
+    let db = pool(app).await?;
+    let row = sqlx::query("SELECT files_json FROM coverage_history WHERE id = ?")
+        .bind(history_id)
+        .fetch_optional(&db)
+        .await
+        .map_err(|e| format!("Failed to load coverage history files: {}", e))?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let files_json: Option<String> = row.try_get("files_json").map_err(|e| e.to_string())?;
+    let Some(json) = files_json else {
+        return Ok(None);
+    };
+    if json.trim().is_empty() {
+        return Ok(None);
+    }
+
+    serde_json::from_str(&json)
+        .map(Some)
+        .map_err(|e| format!("Failed to parse coverage files: {}", e))
 }
 
 // ============================================

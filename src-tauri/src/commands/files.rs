@@ -1,5 +1,58 @@
 use std::path::Path;
 use std::process::Command;
+
+/// 读取文本文件内容（带大小限制，用于生成测试预览）
+#[tauri::command]
+pub async fn read_text_file(path: String) -> Result<String, String> {
+    const MAX_BYTES: u64 = 512 * 1024; // 512 KB
+    let target = Path::new(&path);
+    if !target.exists() {
+        return Err(format!("File does not exist: {}", path));
+    }
+    let meta = std::fs::metadata(target)
+        .map_err(|e| format!("Failed to read file metadata: {}", e))?;
+    if meta.len() > MAX_BYTES {
+        return Err(format!(
+            "File is too large to preview ({} bytes > {} bytes limit)",
+            meta.len(),
+            MAX_BYTES
+        ));
+    }
+    std::fs::read_to_string(target)
+        .map_err(|e| format!("Failed to read file: {}", e))
+}
+
+/// 通过保存对话框将内容写入文件（用于历史导出等）
+#[tauri::command]
+pub async fn save_text_file(
+    app: tauri::AppHandle,
+    default_file_name: String,
+    content: String,
+    filter_name: String,
+    extensions: Vec<String>,
+) -> Result<String, String> {
+    use tauri_plugin_dialog::{DialogExt, FilePath};
+
+    let file_path = app
+        .dialog()
+        .file()
+        .set_file_name(&default_file_name)
+        .add_filter(&filter_name, &extensions.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+        .blocking_save_file()
+        .ok_or("Save dialog was cancelled")?;
+
+    let target = match file_path {
+        FilePath::Path(path) => path,
+        FilePath::Url(url) => url
+            .to_file_path()
+            .map_err(|_| "Invalid file URL returned from save dialog".to_string())?,
+    };
+
+    std::fs::write(&target, content)
+        .map_err(|e| format!("Failed to write file: {}", e))?;
+
+    Ok(target.to_string_lossy().to_string())
+}
 #[tauri::command]
 pub async fn open_in_file_manager(path: String) -> Result<(), String> {
     let target = std::path::Path::new(&path);

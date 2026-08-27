@@ -8,7 +8,7 @@
  *  - 删除无功能的 Filter 按钮；Sort 改为真实可用的排序
  *  - 删除项目增加悬停可见的删除按钮（新手不需要知道右键菜单）
  */
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "vue-i18n";
@@ -163,8 +163,66 @@ async function cloneRepository() {
 /* 搜索 + 排序                                                         */
 /* ------------------------------------------------------------------ */
 const searchQuery = ref("");
-/** true = 最近打开在前（默认），false = 最久在前 */
-const sortDesc = ref(true);
+/** true = 最近打开在前（默认），false = 最久在前（偏好持久化到 uiStore） */
+const sortDesc = ref(uiStore.dashboardSortDesc);
+watch(sortDesc, (v) => uiStore.setDashboardSort(v));
+
+/* 项目表列宽（比例，可拖拽调整并持久化） */
+const colRatios = ref([...uiStore.projectColWidths]);
+const gridTemplateColumns = computed(() =>
+  colRatios.value.map((r) => `${r}fr`).join(" "),
+);
+watch(
+  () => colRatios.value.join(","),
+  (joined) => uiStore.setProjectColWidths(joined.split(",").map(Number)),
+);
+
+const MIN_COL_RATIO = 0.4;
+let dragState: {
+  index: number;
+  startX: number;
+  startRatios: number[];
+  startWidths: [number, number];
+} | null = null;
+
+function startColResize(index: number, e: MouseEvent) {
+  e.preventDefault();
+  const cells = document.querySelectorAll<HTMLElement>("[data-col]");
+  const cellI = cells[index];
+  const cellI1 = cells[index + 1];
+  if (!cellI || !cellI1) return;
+  dragState = {
+    index,
+    startX: e.clientX,
+    startRatios: [...colRatios.value],
+    startWidths: [cellI.getBoundingClientRect().width, cellI1.getBoundingClientRect().width],
+  };
+  window.addEventListener("mousemove", onColDrag);
+  window.addEventListener("mouseup", stopColResize);
+}
+
+function onColDrag(e: MouseEvent) {
+  if (!dragState) return;
+  const { index, startX, startRatios, startWidths } = dragState;
+  const deltaX = e.clientX - startX;
+  const totalRatio = startRatios[index] + startRatios[index + 1];
+  const totalWidth = startWidths[0] + startWidths[1];
+  if (totalWidth <= 0) return;
+  let nextI = startRatios[index] + (deltaX / totalWidth) * totalRatio;
+  nextI = Math.max(MIN_COL_RATIO, Math.min(totalRatio - MIN_COL_RATIO, nextI));
+  const next = [...startRatios];
+  next[index] = nextI;
+  next[index + 1] = totalRatio - nextI;
+  colRatios.value = next;
+}
+
+function stopColResize() {
+  dragState = null;
+  window.removeEventListener("mousemove", onColDrag);
+  window.removeEventListener("mouseup", stopColResize);
+}
+
+onUnmounted(stopColResize);
 
 const visibleProjects = computed(() => {
   const projects = projectStore.projects || [];
@@ -237,8 +295,26 @@ async function refreshPythonVersion() {
 
 onMounted(async () => {
   await projectStore.fetchProjects();
+  await projectStore.validateInterpreters();
   await refreshPythonVersion();
+  window.addEventListener('testmate:focus-search', onFocusSearch);
+  window.addEventListener('testmate:refresh', onRefreshEvent);
 });
+
+onUnmounted(() => {
+  window.removeEventListener('testmate:focus-search', onFocusSearch);
+  window.removeEventListener('testmate:refresh', onRefreshEvent);
+});
+
+const searchInput = ref<HTMLInputElement | null>(null);
+function onFocusSearch() {
+  searchInput.value?.focus();
+}
+function onRefreshEvent() {
+  void projectStore.fetchProjects();
+  void projectStore.validateInterpreters();
+  void refreshPythonVersion();
+}
 
 watch(
   () => projectStore.projects,
@@ -249,7 +325,17 @@ watch(
 /* 导航与删除                                                          */
 /* ------------------------------------------------------------------ */
 const goToImport = () => router.push("/projects/import");
-const goToProject = (id: number) => router.push(`/projects/${id}`);
+
+// 进入项目时恢复到上次停留的标签页（默认概览页）
+const goToProject = (id: number) => {
+  const saved = uiStore.getLastTab(id);
+  const tabs = new Set(['ProjectOverview', 'ProjectGenerate', 'ProjectExecute', 'ProjectCoverage', 'ProjectHistory']);
+  if (saved && tabs.has(saved) && saved !== 'ProjectOverview') {
+    router.push({ name: saved, params: { id } });
+  } else {
+    router.push(`/projects/${id}`);
+  }
+};
 
 /** 待删除项目（确认弹窗） */
 const deleteTarget = ref<Project | null>(null);
@@ -346,6 +432,7 @@ const coverageTone = (coverage: number) =>
             <Search class="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
             <input
               v-model="searchQuery"
+              ref="searchInput"
               type="text"
               :placeholder="t('dashboard.searchPlaceholder')"
               class="input h-8 pl-8 pr-3"
@@ -409,15 +496,27 @@ const coverageTone = (coverage: number) =>
         <!-- 项目表格 -->
         <div v-else class="px-5 py-4" data-tour="project-list">
           <div class="card overflow-hidden">
-            <!-- 表头 -->
+            <!-- 表头（可拖拽调整列宽） -->
             <div
-              class="grid grid-cols-[3fr_1.2fr_1.3fr_1.6fr_1fr] gap-4 border-b border-border bg-zinc-50/70 px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400"
+              class="grid gap-4 border-b border-border bg-zinc-50/70 px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400"
+              :style="{ gridTemplateColumns }"
             >
-              <div>{{ t("dashboard.projectTable.project") }}</div>
-              <div>{{ t("dashboard.projectTable.environment") }}</div>
-              <div>{{ t("dashboard.projectTable.testsPassed") }}</div>
-              <div>{{ t("dashboard.projectTable.coverage") }}</div>
-              <div class="text-right">{{ t("dashboard.projectTable.lastRun") }}</div>
+              <div
+                v-for="(col, i) in (['project', 'environment', 'testsPassed', 'coverage', 'lastRun'] as const)"
+                :key="col"
+                :data-col="i"
+                class="relative min-w-0 select-none"
+                :class="col === 'lastRun' ? 'text-right' : ''"
+              >
+                {{ t(`dashboard.projectTable.${col}`) }}
+                <div
+                  v-if="i < 4"
+                  class="absolute -right-2 top-1/2 z-10 h-4 w-1 -translate-y-1/2 cursor-col-resize rounded hover:bg-brand-200"
+                  title="拖拽调整列宽"
+                  @mousedown="startColResize(i, $event)"
+                  @dblclick.stop
+                />
+              </div>
             </div>
 
             <!-- 行 -->
@@ -427,7 +526,8 @@ const coverageTone = (coverage: number) =>
                 :key="project.id"
                 @click="goToProject(project.id)"
                 @contextmenu.prevent="showProjectMenu(project, $event)"
-                class="group grid cursor-pointer grid-cols-[3fr_1.2fr_1.3fr_1.6fr_1fr] items-center gap-4 px-4 py-3 transition-colors hover:bg-zinc-50"
+                class="group grid cursor-pointer items-center gap-4 px-4 py-3 transition-colors hover:bg-zinc-50"
+                :style="{ gridTemplateColumns }"
               >
                 <!-- 项目信息 + 右键菜单 -->
                 <div class="flex min-w-0 items-center gap-3">

@@ -27,6 +27,9 @@ pub fn run() {
             }
         }))
         .setup(|app| {
+            // 启动时清理上次崩溃残留的子进程（PID 文件）
+            commands::cleanup_orphan_pids(app.handle());
+
             let show = MenuItem::with_id(app, "show", "显示 Testmate", true, None::<&str>)?;
             let hide = MenuItem::with_id(app, "hide", "隐藏到托盘", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
@@ -90,6 +93,7 @@ pub fn run() {
             commands::env::validate_project_directory,
             commands::env::create_virtual_env,
             commands::env::clone_repository,
+            commands::env::validate_project_interpreter,
             commands::files::open_in_file_manager,
             commands::generation::scan_source_files,
             commands::generation::generate_tests,
@@ -97,6 +101,8 @@ pub fn run() {
             commands::generation::strip_python_bom,
             commands::files::open_file,
             commands::files::reveal_in_folder,
+            commands::files::read_text_file,
+            commands::files::save_text_file,
             commands::db_commands::init_db,
             commands::db_commands::get_projects,
             commands::db_commands::add_project,
@@ -112,6 +118,11 @@ pub fn run() {
             commands::db_commands::list_generation_history,
             commands::db_commands::save_coverage_history,
             commands::db_commands::list_coverage_history,
+            commands::db_commands::save_execution_result_details,
+            commands::db_commands::list_execution_result_details,
+            commands::db_commands::save_generation_file_details,
+            commands::db_commands::list_generation_file_details,
+            commands::db_commands::get_coverage_history_files,
             commands::window::set_taskbar_progress,
         ])
         .build(tauri::generate_context!())
@@ -120,6 +131,7 @@ pub fn run() {
     app.run(|app_handle, event| {
         if let tauri::RunEvent::Exit = event {
             app_handle.state::<state::AppState>().kill_all();
+            commands::clear_persisted_pids(&app_handle);
         }
     });
 }

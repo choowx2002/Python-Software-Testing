@@ -11,8 +11,10 @@
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { setLocale } from "../i18n";
+import { useUIStore } from "../stores/uiStore";
 
 const { t, locale } = useI18n();
+const uiStore = useUIStore();
 const currentLocale = computed(() => locale.value);
 
 function switchLocale(lang: "en" | "zh") {
@@ -21,7 +23,10 @@ function switchLocale(lang: "en" | "zh") {
 </script>
 
 <template>
-  <aside class="flex w-60 shrink-0 flex-col border-r border-border bg-white">
+  <aside
+    class="flex shrink-0 flex-col overflow-hidden border-r border-border bg-white transition-[width] duration-200"
+    :class="uiStore.sidebarCollapsed ? 'w-0 border-r-0' : 'w-60'"
+  >
     <!-- 品牌区 -->
     <div class="flex h-14 shrink-0 items-center gap-2.5 border-b border-border px-4">
       <slot name="brand">

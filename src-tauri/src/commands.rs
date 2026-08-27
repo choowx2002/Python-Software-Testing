@@ -150,15 +150,77 @@ pub(crate) fn register_run(app: &AppHandle, run_id: &str, pid: u32) {
     if let Ok(mut processes) = app.state::<AppState>().processes.lock() {
         processes.insert(run_id.to_string(), pid);
     }
+    persist_pid(app, pid);
 }
 
 pub(crate) fn unregister_run(app: &AppHandle, run_id: &str) {
-    if let Ok(mut processes) = app.state::<AppState>().processes.lock() {
-        processes.remove(run_id);
+    let removed_pid = {
+        let state = app.state::<AppState>();
+        let mut processes = state
+            .processes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let pid = processes.remove(run_id);
+        if let Ok(mut cancelled) = state.cancelled_runs.lock() {
+            cancelled.remove(run_id);
+        }
+        pid
+    };
+    if let Some(pid) = removed_pid {
+        unpersist_pid(app, pid);
     }
-    if let Ok(mut cancelled) = app.state::<AppState>().cancelled_runs.lock() {
-        cancelled.remove(run_id);
+}
+
+// ============================================
+// 孤儿进程清理（崩溃/强杀后的残留子进程）
+// 思路：启动时把子进程 pid 写入 {app_data_dir}/running_pids.json；
+// 应用重启时读取并终止仍存活的历史 pid，然后清空。
+// ============================================
+
+fn pids_file(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("running_pids.json"))
+}
+
+pub(crate) fn persist_pid(app: &AppHandle, pid: u32) {
+    let Some(f) = pids_file(app) else { return };
+    let existing: Vec<u32> = std::fs::read_to_string(&f)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let mut next = existing;
+    next.push(pid);
+    let _ = std::fs::write(&f, serde_json::to_string(&next).unwrap_or_default());
+}
+
+pub(crate) fn unpersist_pid(app: &AppHandle, pid: u32) {
+    let Some(f) = pids_file(app) else { return };
+    let existing: Vec<u32> = std::fs::read_to_string(&f)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let next: Vec<u32> = existing.into_iter().filter(|p| *p != pid).collect();
+    let _ = std::fs::write(&f, serde_json::to_string(&next).unwrap_or_default());
+}
+
+pub(crate) fn clear_persisted_pids(app: &AppHandle) {
+    if let Some(f) = pids_file(app) {
+        let _ = std::fs::write(&f, "[]");
     }
+}
+
+/// 启动时清理上次崩溃残留的子进程
+pub(crate) fn cleanup_orphan_pids(app: &AppHandle) {
+    let Some(f) = pids_file(app) else { return };
+    let pids: Vec<u32> = std::fs::read_to_string(&f)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    for pid in pids {
+        if crate::state::process_alive(pid) {
+            let _ = crate::state::terminate_pid(pid, true);
+        }
+    }
+    let _ = std::fs::write(&f, "[]");
 }
 
 #[cfg(test)]

@@ -174,6 +174,7 @@ pub async fn save_coverage_history(
     covered_statements: i64,
     duration: f64,
     command: Option<String>,
+    files_json: Option<String>,
 ) -> Result<i64, String> {
     crate::db::save_coverage_history(
         &app,
@@ -184,6 +185,7 @@ pub async fn save_coverage_history(
         covered_statements,
         duration,
         command,
+        files_json,
     )
     .await
 }
@@ -195,4 +197,51 @@ pub async fn list_coverage_history(
     project_id: i64,
 ) -> Result<Vec<crate::db::CoverageHistoryRow>, String> {
     crate::db::list_coverage_history(&app, project_id).await
+}
+
+/// 批量保存一次执行的所有测试结果明细
+#[tauri::command]
+pub async fn save_execution_result_details(
+    app: tauri::AppHandle,
+    execution_id: i64,
+    results: Vec<crate::db::ExecutionDetailPayload>,
+) -> Result<(), String> {
+    crate::db::save_execution_result_details(&app, execution_id, &results).await
+}
+
+/// 读取一次执行的所有测试结果明细
+#[tauri::command]
+pub async fn list_execution_result_details(
+    app: tauri::AppHandle,
+    execution_id: i64,
+) -> Result<Vec<crate::db::ExecutionResultDetailRow>, String> {
+    crate::db::list_execution_result_details(&app, execution_id).await
+}
+
+/// 批量保存一次生成的所有测试文件明细
+#[tauri::command]
+pub async fn save_generation_file_details(
+    app: tauri::AppHandle,
+    generation_id: i64,
+    files: Vec<crate::db::GenerationFilePayload>,
+) -> Result<(), String> {
+    crate::db::save_generation_file_details(&app, generation_id, &files).await
+}
+
+/// 读取一次生成的所有测试文件明细
+#[tauri::command]
+pub async fn list_generation_file_details(
+    app: tauri::AppHandle,
+    generation_id: i64,
+) -> Result<Vec<crate::db::GenerationFileRow>, String> {
+    crate::db::list_generation_file_details(&app, generation_id).await
+}
+
+/// 读取一次覆盖率运行的文件级明细（未覆盖行号等）
+#[tauri::command]
+pub async fn get_coverage_history_files(
+    app: tauri::AppHandle,
+    history_id: i64,
+) -> Result<Option<Vec<crate::commands::coverage::FileCoverage>>, String> {
+    crate::db::get_coverage_history_files(&app, history_id).await
 }

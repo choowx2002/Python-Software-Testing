@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tokio::process::Command as AsyncCommand;
 use tauri::Emitter;
@@ -612,6 +612,79 @@ pub async fn create_virtual_env(
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
+}
+
+// ============================================
+// 启动校验：项目解释器路径有效性 + 自动恢复
+// ============================================
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct InterpreterValidation {
+    /// "ok"（已存路径有效）| "recovered"（已重探测并更新）| "missing"（找不到）
+    pub status: String,
+    pub interpreter_path: Option<String>,
+}
+
+/// 依次尝试项目 venv，再尝试全局 Python，返回首个可用的解释器
+fn find_interpreter_for_project(project: &Path) -> Option<String> {
+    for candidate in [".venv", "venv"] {
+        let python = if cfg!(target_os = "windows") {
+            project.join(candidate).join("Scripts").join("python.exe")
+        } else {
+            project.join(candidate).join("bin").join("python")
+        };
+        if python.is_file() {
+            return Some(python.to_string_lossy().to_string());
+        }
+    }
+
+    let candidates: &[(&str, &[&str])] = if cfg!(target_os = "windows") {
+        &[("python", &[]), ("python3", &[]), ("py", &["-3"])]
+    } else {
+        &[("python3", &[]), ("python", &[])]
+    };
+    for (cmd, args) in candidates {
+        if let Ok(output) = Command::new(cmd).args(*args).arg("--version").output() {
+            if output.status.success() {
+                return Some(cmd.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// 校验项目解释器路径；失效则自动重探测并更新数据库。
+/// 返回 "ok" / "recovered" / "missing"。
+#[tauri::command]
+pub async fn validate_project_interpreter(
+    app: tauri::AppHandle,
+    project_id: i64,
+) -> Result<InterpreterValidation, String> {
+    let (project_path, interpreter) = crate::db::get_project_interpreter(&app, project_id).await?;
+
+    if let Some(interp) = interpreter {
+        if Path::new(&interp).is_file() {
+            return Ok(InterpreterValidation {
+                status: "ok".to_string(),
+                interpreter_path: Some(interp),
+            });
+        }
+    }
+
+    let project = PathBuf::from(&project_path);
+    if let Some(found) = find_interpreter_for_project(&project) {
+        crate::db::update_project_interpreter(&app, project_id, &found).await?;
+        return Ok(InterpreterValidation {
+            status: "recovered".to_string(),
+            interpreter_path: Some(found),
+        });
+    }
+
+    Ok(InterpreterValidation {
+        status: "missing".to_string(),
+        interpreter_path: None,
+    })
 }
 
 // ============================================

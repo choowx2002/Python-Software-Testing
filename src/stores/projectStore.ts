@@ -128,6 +128,45 @@ export const useProjectStore = defineStore('project', () => {
     }
   }
 
+  /**
+   * 启动校验：逐项目检查 interpreter_path 是否仍有效。
+   * 失效则后端自动重探测并更新 DB，这里同步本地状态。
+   */
+  const validateInterpreters = async () => {
+    const list = [...projects.value]
+    const results = await Promise.all(
+      list.map(async (p) => {
+        try {
+          const res = await invoke<{ status: string; interpreterPath: string | null }>(
+            "validate_project_interpreter",
+            { projectId: p.id },
+          )
+          return { id: p.id, res }
+        } catch {
+          return { id: p.id, res: null }
+        }
+      }),
+    )
+    let changed = false
+    for (const { id, res } of results) {
+      if (!res) continue
+      const proj = projects.value.find((x) => x.id === id)
+      if (!proj) continue
+      if (res.status === "recovered" && res.interpreterPath) {
+        proj.interpreter_path = res.interpreterPath
+        proj.env_status = "Warning"
+        changed = true
+      } else if (res.status === "missing") {
+        proj.interpreter_path = null
+        proj.env_status = "Failed"
+        changed = true
+      }
+    }
+    if (changed) {
+      console.log("[Store] ✅ Interpreter paths validated/recovered")
+    }
+  }
+
   return {
     projects,
     stats,
@@ -135,6 +174,7 @@ export const useProjectStore = defineStore('project', () => {
     fetchProjects,
     updateLastOpened,
     updateProject,
-    deleteProject
+    deleteProject,
+    validateInterpreters
   }
 })
