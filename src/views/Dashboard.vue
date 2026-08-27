@@ -13,6 +13,7 @@ import { useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "vue-i18n";
 import { useProjectStore, type Project } from "../stores/projectStore";
+import { useUIStore } from "../stores/uiStore";
 import {
   ArrowDown,
   ArrowUp,
@@ -27,6 +28,9 @@ import {
   Sparkles,
   Terminal,
   Trash2,
+  Edit,
+  Copy,
+  ExternalLink,
 } from "@lucide/vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import AppSidebar from "../components/AppSidebar.vue";
@@ -36,10 +40,51 @@ import AppEmptyState from "../components/ui/AppEmptyState.vue";
 import StatusPill from "../components/ui/StatusPill.vue";
 import AppModal from "../components/ui/AppModal.vue";
 import AppConfirmModal from "../components/ui/AppConfirmModal.vue";
+import AppTooltip from "../components/ui/AppTooltip.vue";
+import AppContextMenu from "../components/ui/AppContextMenu.vue";
+import AppTour from "../components/ui/AppTour.vue";
+import { useDashboardTour } from "../composables/useTour";
 
 const router = useRouter();
 const projectStore = useProjectStore();
+const uiStore = useUIStore();
 const { t } = useI18n();
+
+/* Tour: 首次访问引导 */
+const tourSteps = useDashboardTour()
+const showTour = ref(!uiStore.tourCompleted && projectStore.projects.length === 0)
+
+function onTourComplete() {
+  uiStore.completeTour()
+  showTour.value = false
+}
+
+/* 右键菜单状态 */
+const projectMenu = ref<{ project: Project; x: number; y: number } | null>(null)
+
+function showProjectMenu(project: Project, e: MouseEvent) {
+  projectMenu.value = { project, x: e.clientX, y: e.clientY }
+}
+
+const projectMenuItems = computed(() => {
+  if (!projectMenu.value) return []
+  const p = projectMenu.value.project
+  return [
+    { label: t('contextmenu.openProject'), icon: ExternalLink, action: () => router.push(`/projects/${p.id}`) },
+    { label: t('contextmenu.openInFolder'), icon: FolderPlus, action: () => invoke('open_in_file_manager', { path: p.path }) },
+    { label: t('contextmenu.rename'), icon: Edit, action: () => renameProject(p) },
+    { label: t('contextmenu.copyPath'), icon: Copy, action: () => navigator.clipboard.writeText(p.path) },
+    { divider: true },
+    { label: t('contextmenu.delete'), icon: Trash2, action: () => handleDelete(p), danger: true }
+  ]
+})
+
+function renameProject(project: Project) {
+  const newName = prompt(t('dashboard.renamePrompt', { name: project.name }))
+  if (newName && newName.trim() !== project.name) {
+    projectStore.updateProject(project.id, newName.trim())
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /* Clone Repository 状态（原逻辑保持不变）                              */
@@ -238,36 +283,50 @@ const coverageTone = (coverage: number) =>
     <AppSidebar>
       <p class="section-label mb-1.5">{{ t("dashboard.quickActions") }}</p>
       <div class="space-y-0.5">
-        <AppNavItem
-          :icon="FolderPlus"
-          :label="t('dashboard.importProject')"
-          :description="t('dashboard.importProjectDesc')"
-          @click="goToImport"
-        />
-        <AppNavItem
-          :icon="GitBranch"
-          :label="t('dashboard.cloneRepository')"
-          :description="t('dashboard.cloneRepositoryDesc')"
-          @click="openCloneModal"
-        />
-        <AppNavItem
-          :icon="Sparkles"
-          :label="t('dashboard.aiTestGenerator')"
-          description="Pynguin"
-          disabled
-          :title="t('dashboard.comingSoon')"
-        />
+        <AppTooltip :content="t('dashboard.importProjectDesc')" position="right">
+          <AppNavItem
+            data-tour="import-project"
+            :icon="FolderPlus"
+            :label="t('dashboard.importProject')"
+            :description="t('dashboard.importProjectDesc')"
+            @click="goToImport"
+          />
+        </AppTooltip>
+        <AppTooltip :content="t('dashboard.cloneRepositoryDesc')" position="right">
+          <AppNavItem
+            data-tour="clone-repo"
+            :icon="GitBranch"
+            :label="t('dashboard.cloneRepository')"
+            :description="t('dashboard.cloneRepositoryDesc')"
+            @click="openCloneModal"
+          />
+        </AppTooltip>
+        <AppTooltip :content="t('dashboard.comingSoon')" position="right">
+          <AppNavItem
+            :icon="Sparkles"
+            :label="t('dashboard.aiTestGenerator')"
+            description="Pynguin"
+            disabled
+            :title="t('dashboard.comingSoon')"
+          />
+        </AppTooltip>
       </div>
 
       <p class="section-label mb-1.5 mt-5">Resources</p>
       <div class="space-y-0.5">
-        <AppNavItem :icon="BookOpen" label="Documentation" disabled :title="t('dashboard.comingSoon')" />
-        <AppNavItem :icon="Bug" label="Report Issue" disabled :title="t('dashboard.comingSoon')" />
+        <AppTooltip :content="t('dashboard.comingSoon')" position="right">
+          <AppNavItem :icon="BookOpen" label="Documentation" disabled :title="t('dashboard.comingSoon')" />
+        </AppTooltip>
+        <AppTooltip :content="t('dashboard.comingSoon')" position="right">
+          <AppNavItem :icon="Bug" label="Report Issue" disabled :title="t('dashboard.comingSoon')" />
+        </AppTooltip>
       </div>
 
       <p class="section-label mb-1.5 mt-5">Debug</p>
       <div class="space-y-0.5">
-        <AppNavItem :icon="Database" label="View DB Schema" @click="router.push('/debug/schema')" />
+        <AppTooltip :content="t('dashboard.viewDbSchema')" position="right">
+          <AppNavItem :icon="Database" label="View DB Schema" @click="router.push('/debug/schema')" />
+        </AppTooltip>
       </div>
     </AppSidebar>
 
@@ -293,15 +352,16 @@ const coverageTone = (coverage: number) =>
               aria-label="Search projects"
             />
           </div>
-          <AppButton
-            variant="secondary"
-            size="sm"
-            :title="sortDesc ? 'Newest first' : 'Oldest first'"
-            @click="sortDesc = !sortDesc"
-          >
-            <component :is="sortIcon" class="h-3.5 w-3.5" />
-            {{ t("dashboard.sortLastOpened") }}
-          </AppButton>
+          <AppTooltip :content="sortDesc ? t('dashboard.sortNewest') : t('dashboard.sortOldest')" position="top">
+            <AppButton
+              variant="secondary"
+              size="sm"
+              @click="sortDesc = !sortDesc"
+            >
+              <component :is="sortIcon" class="h-3.5 w-3.5" />
+              {{ t("dashboard.sortLastOpened") }}
+            </AppButton>
+          </AppTooltip>
         </div>
       </header>
 
@@ -347,7 +407,7 @@ const coverageTone = (coverage: number) =>
         />
 
         <!-- 项目表格 -->
-        <div v-else class="px-5 py-4">
+        <div v-else class="px-5 py-4" data-tour="project-list">
           <div class="card overflow-hidden">
             <!-- 表头 -->
             <div
@@ -366,10 +426,10 @@ const coverageTone = (coverage: number) =>
                 v-for="project in visibleProjects"
                 :key="project.id"
                 @click="goToProject(project.id)"
-                @contextmenu.prevent="handleDelete(project)"
+                @contextmenu.prevent="showProjectMenu(project, $event)"
                 class="group grid cursor-pointer grid-cols-[3fr_1.2fr_1.3fr_1.6fr_1fr] items-center gap-4 px-4 py-3 transition-colors hover:bg-zinc-50"
               >
-                <!-- 项目信息 + 悬停删除 -->
+                <!-- 项目信息 + 右键菜单 -->
                 <div class="flex min-w-0 items-center gap-3">
                   <div
                     class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500"
@@ -378,9 +438,8 @@ const coverageTone = (coverage: number) =>
                   </div>
                   <div class="min-w-0">
                     <div class="flex items-center gap-1.5">
-                      <span class="truncate text-[13px] font-medium text-zinc-800">{{
-                        project.name
-                      }}</span>
+                      <span class="truncate text-[13px] font-medium text-zinc-800">{{ project.name }}</span>
+                      <!-- 删除按钮保留作为快速入口，右键菜单提供完整操作 -->
                       <button
                         type="button"
                         class="shrink-0 rounded p-1 text-zinc-300 opacity-0 transition-all hover:bg-rose-50 hover:text-rose-500 focus-visible:opacity-100 group-hover:opacity-100"
@@ -522,6 +581,22 @@ const coverageTone = (coverage: number) =>
       :confirm-label="t('common.delete')"
       @confirm="confirmDeleteProject"
       @update:open="(open: boolean) => { if (!open) deleteTarget = null }"
+    />
+
+    <!-- 项目右键菜单 -->
+    <AppContextMenu
+      v-if="projectMenu"
+      :items="projectMenuItems"
+      :open="!!projectMenu"
+      @close="projectMenu = null"
+    />
+
+    <!-- 新手引导 Tour -->
+    <AppTour
+      v-if="showTour"
+      :steps="tourSteps"
+      @complete="onTourComplete"
+      @skip="onTourComplete"
     />
   </div>
 </template>

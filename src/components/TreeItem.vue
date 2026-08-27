@@ -32,12 +32,17 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "toggle-dir", path: string): void;
   (e: "toggle-file", path: string): void;
+  (e: "context-menu", payload: { node: TreeNode; ev: MouseEvent }): void;
 }>();
 
 const isExpanded = computed(() => props.expandedDirs.has(props.node.path));
 const isSelected = computed(() =>
   props.selectedFiles.includes(props.node.relativePath)
 );
+
+function onContextMenu(ev: MouseEvent) {
+  emit("context-menu", { node: props.node, ev });
+}
 </script>
 
 <template>
@@ -45,6 +50,7 @@ const isSelected = computed(() =>
     <div
       class="flex items-center gap-2 border-b border-slate-100 px-3 py-2 text-left transition last:border-b-0 hover:bg-slate-50"
       :style="{ paddingLeft: node.depth * 16 + 12 + 'px' }"
+      @contextmenu.prevent="onContextMenu"
     >
       <!-- 目录节点 -->
       <template v-if="node.type === 'directory'">
@@ -109,6 +115,7 @@ const isSelected = computed(() =>
         :disabled="disabled"
         @toggle-dir="emit('toggle-dir', $event)"
         @toggle-file="emit('toggle-file', $event)"
+        @context-menu="emit('context-menu', $event)"
       />
     </template>
   </div>

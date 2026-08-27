@@ -3,6 +3,8 @@ mod db;
 mod state;
 
 use tauri::Manager;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::TrayIconBuilder;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -13,6 +15,60 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(tauri_plugin_log::log::LevelFilter::Debug)
+                .build(),
+        )
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_focus();
+            }
+        }))
+        .setup(|app| {
+            let show = MenuItem::with_id(app, "show", "显示 Testmate", true, None::<&str>)?;
+            let hide = MenuItem::with_id(app, "hide", "隐藏到托盘", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            let menu = Menu::with_items(
+                app,
+                &[&show, &hide, &PredefinedMenuItem::separator(app)?, &quit],
+            )?;
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("Testmate")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| {
+                    match event.id.as_ref() {
+                        "show" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "hide" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.hide();
+                            }
+                        }
+                        "quit" => app.exit(0),
+                        _ => {}
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    use tauri::tray::MouseButtonState;
+                    use tauri::tray::TrayIconEvent;
+                    if let TrayIconEvent::Click { button_state: MouseButtonState::Up, .. } = event {
+                        if let Some(window) = tray.app_handle().get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+            Ok(())
+        })
         .manage(state::AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::execution::scan_test_files,
@@ -56,6 +112,7 @@ pub fn run() {
             commands::db_commands::list_generation_history,
             commands::db_commands::save_coverage_history,
             commands::db_commands::list_coverage_history,
+            commands::window::set_taskbar_progress,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

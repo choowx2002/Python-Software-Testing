@@ -37,12 +37,85 @@ import { useI18n } from "vue-i18n";
 import AppModal from "../../../components/ui/AppModal.vue";
 import AppButton from "../../../components/ui/AppButton.vue";
 import AppConfirmModal from "../../../components/ui/AppConfirmModal.vue";
+import AppTooltip from "../../../components/ui/AppTooltip.vue";
+import AppContextMenu from "../../../components/ui/AppContextMenu.vue";
+import AppHelpPopover from "../../../components/ui/AppHelpPopover.vue";
 import StatusPill from "../../../components/ui/StatusPill.vue";
+import { useTaskbarProgress } from "../../../composables/useTaskbarProgress";
+import { useWindowTitle } from "../../../composables/useWindowTitle";
+import { usePageShortcuts } from "../../../composables/useKeyboardShortcuts";
+import { notifyExecutionComplete } from "../../../composables/useNotifications";
 
 const route = useRoute();
 const router = useRouter();
 const projectStore = useProjectStore();
 const { t } = useI18n();
+
+const { setProgress: setTaskProgress, clear: clearTaskProgress } = useTaskbarProgress();
+const { setStatus: setWinStatus, reset: resetWinStatus } = useWindowTitle();
+
+/* 右键菜单：测试用例列表 */
+const testCaseMenu = ref<{ test: TestCase; x: number; y: number } | null>(null);
+function showTestCaseMenu(test: TestCase, e: MouseEvent) {
+  if (isRunning.value) return;
+  testCaseMenu.value = { test, x: e.clientX, y: e.clientY };
+}
+const testCaseMenuItems = computed(() => {
+  if (!testCaseMenu.value) return [];
+  const test = testCaseMenu.value.test;
+  return [
+    {
+      label: t("contextmenu.runThisTest"),
+      icon: Play,
+      action: () => {
+        selectedTestCases.value = [test.id];
+        testScope.value = "selected";
+        void runTests();
+      },
+    },
+    { divider: true },
+    { label: t("contextmenu.copyTestId"), icon: Copy, action: () => copyText(test.id) },
+  ];
+});
+
+/* 右键菜单：测试结果列表 */
+const resultMenu = ref<{ result: TestResult; x: number; y: number } | null>(null);
+function showResultMenu(result: TestResult, e: MouseEvent) {
+  resultMenu.value = { result, x: e.clientX, y: e.clientY };
+}
+const resultMenuItems = computed(() => {
+  if (!resultMenu.value) return [];
+  const r = resultMenu.value.result;
+  const isFailed = r.status === "failed" || r.status === "error";
+  return [
+    {
+      label: t("contextmenu.copyError"),
+      icon: Copy,
+      disabled: !r.errorMessage,
+      action: () => copyText(r.errorMessage ?? ""),
+    },
+    {
+      label: t("contextmenu.rerunFailed"),
+      icon: RotateCcw,
+      disabled: !isFailed,
+      action: () => {
+        if (isFailed) {
+          selectedTestCases.value = failedResults.value.map((x) => x.id);
+          testScope.value = "selected";
+          void runTests();
+        }
+      },
+    },
+  ];
+});
+
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (error) {
+    console.error("[Execute] copy failed:", error);
+  }
+}
 
 const projectId = computed(() => Number(route.params.id));
 
@@ -206,6 +279,13 @@ const presets: Preset[] = [
 const activePreset = computed(() => {
   return presets.find((preset) => preset.id === selectedPreset.value);
 });
+
+const presetHelpMap: Record<string, string> = {
+  standard: t("help.presetStandard"),
+  quick: t("help.presetQuick"),
+  debug: t("help.presetDebug"),
+  "stop-on-failure": t("help.presetStopOnFailure"),
+};
 
 const activeArguments = computed(() => {
   if (customArguments.value.trim()) {
@@ -493,6 +573,10 @@ async function setupTestListeners() {
     isRunning.value = true;
     showPytestOutput.value = false;
     logCounter = 0;
+
+    setWinStatus(t("execute.results.statusRunning"));
+    const expected = event.payload.total > 0 ? event.payload.total : expectedTotal;
+    void setTaskProgress(0, expected || 1, "indeterminate");
   });
 
   unlistenOutput = await listen<TestOutputEvent>("test-output", (event) => {
@@ -541,6 +625,18 @@ async function setupTestListeners() {
 
       currentTest.value = null;
 
+      clearTaskProgress();
+      resetWinStatus();
+
+      // 完成后系统通知（长任务在后台时提醒用户）
+      if (currentProject.value?.name) {
+        void notifyExecutionComplete(
+          currentProject.value.name,
+          event.payload.passed,
+          event.payload.failed,
+        );
+      }
+
       await saveExecutionToDb(event.payload);
 
       // 手动运行且有测试通过时：弹出下一步询问（覆盖率 / 保存选择 / 稍后）
@@ -582,6 +678,10 @@ function parseRealtimeProgress(line: string) {
 
   if (completed < totalTests.value) {
     completedTests.value = completed + 1;
+  }
+
+  if (totalTests.value > 0) {
+    void setTaskProgress(Math.min(completed + 1, totalTests.value), totalTests.value, "normal");
   }
 }
 
@@ -1135,6 +1235,16 @@ onMounted(() => {
   void setupTestListeners();
 });
 
+// Ctrl+Enter 快速运行当前选中的测试
+usePageShortcuts(
+  {
+    'ctrl+enter': () => {
+      if (canRun.value) void runTests();
+    },
+  },
+  () => !isRunning.value && testScope.value !== 'suite',
+);
+
 onUnmounted(() => {
   unlistenStarted?.();
   unlistenOutput?.();
@@ -1290,6 +1400,7 @@ onUnmounted(() => {
               :disabled="isRunning"
               class="flex w-full items-center gap-3 border-b border-border px-3 py-2 text-left transition last:border-b-0 hover:bg-zinc-50 disabled:cursor-not-allowed"
               @click="toggleTest(test.id)"
+              @contextmenu.prevent="showTestCaseMenu(test, $event)"
             >
               <span
                 class="flex h-4 w-4 shrink-0 items-center justify-center rounded border transition"
@@ -1355,15 +1466,16 @@ onUnmounted(() => {
                   <Play class="h-3.5 w-3.5" />
                   {{ t("common.run") }}
                 </AppButton>
-                <button
-                  type="button"
-                  :disabled="isRunning || isRunningSuite"
-                  class="btn btn-danger btn-sm"
-                  :title="t('execute.deleteSuiteTitle')"
-                  @click="deleteSuiteTarget = suite"
-                >
-                  <Trash2 class="h-3.5 w-3.5" />
-                </button>
+                <AppTooltip :content="t('execute.deleteSuiteTitle')" position="top">
+                  <button
+                    type="button"
+                    :disabled="isRunning || isRunningSuite"
+                    class="btn btn-danger btn-sm"
+                    @click="deleteSuiteTarget = suite"
+                  >
+                    <Trash2 class="h-3.5 w-3.5" />
+                  </button>
+                </AppTooltip>
               </div>
             </div>
           </div>
@@ -1427,7 +1539,7 @@ onUnmounted(() => {
               :key="preset.id"
               type="button"
               :disabled="isRunning"
-              class="rounded-lg border px-3.5 py-2.5 text-left transition disabled:cursor-not-allowed"
+              class="relative rounded-lg border px-3.5 py-2.5 text-left transition disabled:cursor-not-allowed"
               :class="
                 selectedPreset === preset.id && !customArguments.trim()
                   ? 'border-brand-200 bg-brand-50'
@@ -1441,6 +1553,9 @@ onUnmounted(() => {
               <div class="text-[13px] font-medium text-zinc-900">{{ preset.name }}</div>
               <div class="mt-0.5 text-[11px] leading-4 text-zinc-500">{{ preset.description }}</div>
               <div class="mt-1 font-mono text-[10px] text-zinc-400">{{ preset.args.join(" ") }}</div>
+              <span class="absolute right-2 top-2" @click.stop>
+                <AppHelpPopover :title="preset.name" :content="presetHelpMap[preset.id] ?? ''" />
+              </span>
             </button>
           </div>
 
@@ -1647,7 +1762,7 @@ onUnmounted(() => {
             </div>
 
             <div class="mt-1 divide-y divide-border">
-              <div v-for="result in filteredResults" :key="result.id" class="py-2.5">
+              <div v-for="result in filteredResults" :key="result.id" class="py-2.5" @contextmenu.prevent="showResultMenu(result, $event)">
                 <div class="flex items-center gap-3">
                   <component
                     :is="getResultIcon(result.status)"
@@ -1807,6 +1922,22 @@ onUnmounted(() => {
       :confirm-label="t('common.delete')"
       @confirm="confirmDeleteSuite"
       @update:open="(open: boolean) => { if (!open) deleteSuiteTarget = null }"
+    />
+
+    <!-- 测试用例右键菜单 -->
+    <AppContextMenu
+      v-if="testCaseMenu"
+      :items="testCaseMenuItems"
+      :open="!!testCaseMenu"
+      @close="testCaseMenu = null"
+    />
+
+    <!-- 测试结果右键菜单 -->
+    <AppContextMenu
+      v-if="resultMenu"
+      :items="resultMenuItems"
+      :open="!!resultMenu"
+      @close="resultMenu = null"
     />
   </div>
 </template>

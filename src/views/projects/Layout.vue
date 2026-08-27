@@ -4,6 +4,8 @@
  *  - 侧边栏：项目卡（含迷你覆盖率条）+ 四个功能区导航（Overview → Generate → Execute → Coverage）
  *  - 右侧概览面板已抽离为独立 Overview 页，主区域全宽给子页面
  *  - 环境状态接入 StatusPill；返回按钮走 AppSidebar footer 插槽
+ *  - 键盘快捷键：Ctrl+1~5 切换标签页，Ctrl+B 切换侧边栏
+ *  - 窗口标题动态更新
  */
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -25,6 +27,9 @@ import AppSidebar from "../../components/AppSidebar.vue";
 import AppNavItem from "../../components/ui/AppNavItem.vue";
 import AppButton from "../../components/ui/AppButton.vue";
 import StatusPill from "../../components/ui/StatusPill.vue";
+import AppTooltip from "../../components/ui/AppTooltip.vue";
+import { useWindowTitle } from "../../composables/useWindowTitle";
+import { usePageShortcuts } from "../../composables/useKeyboardShortcuts";
 
 type ProjectRouteName =
   | "ProjectOverview"
@@ -37,6 +42,9 @@ const route = useRoute();
 const router = useRouter();
 const projectStore = useProjectStore();
 const { t } = useI18n();
+
+// Window title management
+const { setStatus, reset: resetWindowTitle } = useWindowTitle()
 
 const isRefreshing = ref(false);
 const localError = ref<string | null>(null);
@@ -55,30 +63,40 @@ const navItems = computed(() => [
     label: t("layout.tabs.overview"),
     desc: t("layout.tabsDesc.overview"),
     icon: LayoutDashboard,
+    tour: "overview-tab",
+    shortcut: "1",
   },
   {
     name: "ProjectGenerate" as const,
     label: t("layout.tabs.generate"),
     desc: t("layout.tabsDesc.generate"),
     icon: WandSparkles,
+    tour: "generate-tab",
+    shortcut: "2",
   },
   {
     name: "ProjectExecute" as const,
     label: t("layout.tabs.execute"),
     desc: t("layout.tabsDesc.execute"),
     icon: Play,
+    tour: "execute-tab",
+    shortcut: "3",
   },
   {
     name: "ProjectCoverage" as const,
     label: t("layout.tabs.coverage"),
     desc: t("layout.tabsDesc.coverage"),
     icon: Gauge,
+    tour: "coverage-tab",
+    shortcut: "4",
   },
   {
     name: "ProjectHistory" as const,
     label: t("layout.tabs.history"),
     desc: t("layout.tabsDesc.history"),
     icon: History,
+    tour: "history-tab",
+    shortcut: "5",
   },
 ]);
 
@@ -172,6 +190,42 @@ async function ensureProjectLoaded() {
   }
 }
 
+// Keyboard shortcuts for tab switching (Ctrl+1~5)
+usePageShortcuts({
+  'ctrl+1': () => goToSection('ProjectOverview'),
+  'ctrl+2': () => goToSection('ProjectGenerate'),
+  'ctrl+3': () => goToSection('ProjectExecute'),
+  'ctrl+4': () => goToSection('ProjectCoverage'),
+  'ctrl+5': () => goToSection('ProjectHistory'),
+}, () => !isRefreshing.value)
+
+// Update window title when project or route changes
+watch(
+  () => {
+    const projectName = currentProject.value?.name
+    const routeNameStr = String(route.name)
+    return [projectName, routeNameStr] as const
+  },
+  ([_name, _routeName]) => {
+    const name = _name
+    const routeName = _routeName
+    if (name) {
+      const tabLabels: Record<string, string> = {
+        ProjectOverview: t('layout.tabs.overview'),
+        ProjectGenerate: t('layout.tabs.generate'),
+        ProjectExecute: t('layout.tabs.execute'),
+        ProjectCoverage: t('layout.tabs.coverage'),
+        ProjectHistory: t('layout.tabs.history'),
+      }
+      const tabLabel = tabLabels[routeName] ?? ''
+      setStatus(`${name} — ${tabLabel}`)
+    } else {
+      resetWindowTitle()
+    }
+  },
+  { immediate: true }
+)
+
 watch(
   () => route.params.id,
   () => {
@@ -222,15 +276,21 @@ onMounted(() => {
       <!-- 功能区导航 -->
       <p class="section-label mb-1.5">{{ t("layout.pageNav") }}</p>
       <div class="space-y-0.5">
-        <AppNavItem
+        <AppTooltip
           v-for="item in navItems"
           :key="item.name"
-          :icon="item.icon"
-          :label="item.label"
-          :description="item.desc"
-          :active="route.name === item.name"
-          @click="goToSection(item.name)"
-        />
+          :content="`${item.label} (Ctrl+${item.shortcut})`"
+          position="right"
+        >
+          <AppNavItem
+            :data-tour="item.tour"
+            :icon="item.icon"
+            :label="item.label"
+            :description="item.desc"
+            :active="route.name === item.name"
+            @click="goToSection(item.name)"
+          />
+        </AppTooltip>
       </div>
 
       <!-- 返回按钮 -->
@@ -249,13 +309,15 @@ onMounted(() => {
         <div class="flex min-w-0 items-center gap-3">
           <!-- 面包屑：Projects / 项目名 -->
           <div class="flex min-w-0 items-center gap-1.5 text-[13px]">
-            <button
-              type="button"
-              class="shrink-0 rounded px-1.5 py-0.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700"
-              @click="goBack"
-            >
-              {{ t("layout.breadcrumbProjects") }}
-            </button>
+            <AppTooltip :content="t('layout.backToDashboard')" position="top">
+              <button
+                type="button"
+                class="shrink-0 rounded px-1.5 py-0.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700"
+                @click="goBack"
+              >
+                {{ t("layout.breadcrumbProjects") }}
+              </button>
+            </AppTooltip>
             <span class="text-zinc-300">/</span>
             <h1 class="truncate text-sm font-semibold text-zinc-900">
               {{ currentProject?.name ?? t("layout.context") }}
@@ -273,14 +335,18 @@ onMounted(() => {
         </div>
 
         <div class="flex shrink-0 items-center gap-2">
-          <AppButton variant="secondary" @click="openProjectFolder">
-            <FolderOpen class="h-4 w-4" />
-            {{ t("layout.openFolder") }}
-          </AppButton>
-          <AppButton variant="primary" :loading="isRefreshing" @click="refreshProject">
-            <RefreshCw v-if="!isRefreshing" class="h-4 w-4" />
-            {{ t("common.refresh") }}
-          </AppButton>
+          <AppTooltip :content="t('layout.openFolder')" position="top">
+            <AppButton variant="secondary" @click="openProjectFolder">
+              <FolderOpen class="h-4 w-4" />
+              {{ t("layout.openFolder") }}
+            </AppButton>
+          </AppTooltip>
+          <AppTooltip :content="t('common.refresh')" position="top">
+            <AppButton variant="primary" :loading="isRefreshing" @click="refreshProject">
+              <RefreshCw v-if="!isRefreshing" class="h-4 w-4" />
+              {{ t("common.refresh") }}
+            </AppButton>
+          </AppTooltip>
         </div>
       </header>
 

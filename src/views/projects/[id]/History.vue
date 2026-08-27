@@ -6,12 +6,13 @@
  * 数据源：list_execution_history / list_generation_history / list_coverage_history
  */
 import { computed, onMounted, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "vue-i18n";
-import { Gauge, History, Loader2, Play, WandSparkles } from "@lucide/vue";
+import { Copy, Gauge, History, Loader2, Play, WandSparkles } from "@lucide/vue";
 import { useProjectStore } from "../../../stores/projectStore";
 import StatusPill from "../../../components/ui/StatusPill.vue";
+import AppContextMenu from "../../../components/ui/AppContextMenu.vue";
 import CombinedTrendChart from "../../../components/ui/CombinedTrendChart.vue";
 
 interface ExecutionHistoryRow {
@@ -70,8 +71,34 @@ interface TimelineEntry {
 }
 
 const route = useRoute();
+const router = useRouter();
 const projectStore = useProjectStore();
 const { t } = useI18n();
+
+/* 右键菜单：时间线条目 */
+const timelineMenu = ref<{ entry: TimelineEntry; x: number; y: number } | null>(null);
+function showTimelineMenu(entry: TimelineEntry, e: MouseEvent) {
+  timelineMenu.value = { entry, x: e.clientX, y: e.clientY };
+}
+const timelineMenuItems = computed(() => {
+  if (!timelineMenu.value) return [];
+  const entry = timelineMenu.value.entry;
+  return [
+    { label: t("contextmenu.copyLine"), icon: Copy, action: () => copyText(entry.summary) },
+    {
+      label: t("contextmenu.viewDetails"),
+      icon: History,
+      action: () => void router.push({ name: "ProjectHistory", params: { id: projectId.value } }),
+    },
+  ];
+});
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (error) {
+    console.error("[History] copy failed:", error);
+  }
+}
 
 const projectId = computed(() => Number(route.params.id));
 
@@ -429,6 +456,7 @@ const latestPassRate = computed(() => {
                   v-for="entry in group.entries"
                   :key="entry.key"
                   class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg px-2 py-1.5 transition hover:bg-zinc-50"
+                  @contextmenu.prevent="showTimelineMenu(entry, $event)"
                 >
                   <!-- 类型标识 -->
                   <span
@@ -508,5 +536,13 @@ const latestPassRate = computed(() => {
         </template>
       </section>
     </template>
+
+    <!-- 时间线条目右键菜单 -->
+    <AppContextMenu
+      v-if="timelineMenu"
+      :items="timelineMenuItems"
+      :open="!!timelineMenu"
+      @close="timelineMenu = null"
+    />
   </div>
 </template>

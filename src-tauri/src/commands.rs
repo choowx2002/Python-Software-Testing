@@ -93,6 +93,7 @@ pub mod generation;
 pub mod files;
 pub mod coverage;
 pub mod db_commands;
+pub mod window;
 
 // ============================================
 // Shared helpers used by multiple sub-modules

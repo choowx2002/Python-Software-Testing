@@ -32,12 +32,51 @@ import { useProjectStore } from "../../../stores/projectStore";
 import TreeItem from "../../../components/TreeItem.vue";
 import { useI18n } from "vue-i18n";
 import AppButton from "../../../components/ui/AppButton.vue";
+import AppContextMenu from "../../../components/ui/AppContextMenu.vue";
+import AppHelpPopover from "../../../components/ui/AppHelpPopover.vue";
 import StatusPill from "../../../components/ui/StatusPill.vue";
+import { useTaskbarProgress } from "../../../composables/useTaskbarProgress";
+import { useWindowTitle } from "../../../composables/useWindowTitle";
+import { notifyCoverageComplete } from "../../../composables/useNotifications";
 
 const route = useRoute();
 const router = useRouter();
 const projectStore = useProjectStore();
 const { t } = useI18n();
+
+const { setProgress: setTaskProgress, clear: clearTaskProgress } = useTaskbarProgress();
+const { setStatus: setWinStatus, reset: resetWinStatus } = useWindowTitle();
+
+/* 右键菜单：文件列表 */
+const fileMenu = ref<{ file: FileCoverage; x: number; y: number } | null>(null);
+function showFileMenu(file: FileCoverage, e: MouseEvent) {
+  fileMenu.value = { file, x: e.clientX, y: e.clientY };
+}
+const fileMenuItems = computed(() => {
+  if (!fileMenu.value) return [];
+  const f = fileMenu.value.file;
+  return [
+    {
+      label: t("coverage.openInFileManager"),
+      icon: FolderOpen,
+      action: () => {
+        const p = currentProject.value?.path;
+        if (p) void invoke("reveal_in_folder", { path: `${p}/${f.path}` });
+      },
+    },
+    { divider: true },
+    { label: t("contextmenu.copyPath"), icon: Copy, action: () => copyText(f.path) },
+    { label: t("contextmenu.exportFile"), icon: Download, action: () => toggleDetail(f.path) },
+  ];
+});
+
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (error) {
+    console.error("[Coverage] copy failed:", error);
+  }
+}
 
 const projectId = computed(() => Number(route.params.id));
 
@@ -672,6 +711,9 @@ async function setupCoverageListeners() {
       coverageOutput.value = [];
       showCoverageLog.value = false;
       logCounter = 0;
+
+      setWinStatus(t("coverage.status.running"));
+      void setTaskProgress(0, 1, "indeterminate");
     },
   );
 
@@ -698,6 +740,17 @@ async function setupCoverageListeners() {
 
       isRunning.value = false;
       executionDuration.value = event.payload.duration;
+
+      clearTaskProgress();
+      resetWinStatus();
+
+      // 完成后系统通知（长任务在后台时提醒用户）
+      if (currentProject.value?.name && event.payload.summary) {
+        void notifyCoverageComplete(
+          currentProject.value.name,
+          event.payload.summary.percentCovered,
+        );
+      }
 
       if (event.payload.summary) {
         summary.value = event.payload.summary;
@@ -1413,7 +1466,10 @@ onUnmounted(() => {
         </div>
 
         <div class="rounded-lg border border-border p-3">
-          <div class="text-[10px] text-zinc-500">{{ t("coverage.summary.branchCoverage") }}</div>
+          <div class="flex items-center gap-1 text-[10px] text-zinc-500">
+            <span>{{ t("coverage.summary.branchCoverage") }}</span>
+            <AppHelpPopover :title="t('coverage.summary.branchCoverage')" :content="t('help.branchCoverage')" />
+          </div>
           <template v-if="summary!.branchPercent !== null">
             <div class="mt-0.5 text-sm font-semibold text-zinc-900">
               {{ t("coverage.summary.branches", { covered: summary!.coveredBranches ?? 0, total: summary!.totalBranches ?? 0 }) }}
@@ -1478,6 +1534,7 @@ onUnmounted(() => {
               :disabled="isRunning"
               class="flex w-full items-center gap-3 px-4 py-2.5 text-left transition hover:bg-zinc-50 disabled:cursor-not-allowed"
               @click="toggleDetail(file.path)"
+              @contextmenu.prevent="showFileMenu(file, $event)"
             >
               <FileCode2 class="h-4 w-4 shrink-0 text-zinc-400" />
               <span class="min-w-0 flex-1">
@@ -1672,5 +1729,13 @@ onUnmounted(() => {
         </pre>
       </div>
     </section>
+
+    <!-- 文件列表右键菜单 -->
+    <AppContextMenu
+      v-if="fileMenu"
+      :items="fileMenuItems"
+      :open="!!fileMenu"
+      @close="fileMenu = null"
+    />
   </div>
 </template>

@@ -6,6 +6,8 @@ import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useI18n } from 'vue-i18n'
 import EnvFixWizard from '../../components/EnvFixWizard.vue'
+import AppTooltip from '../../components/ui/AppTooltip.vue'
+import AppErrorBanner from '../../components/ui/AppErrorBanner.vue'
 import {
   FolderPlus, FolderOpen, Check, X, AlertCircle,
   ArrowLeft, Loader2, Sparkles, Terminal, Package
@@ -209,12 +211,14 @@ function isPhase(p: Phase): boolean {
 
 <template>
   <div class="h-screen w-screen flex flex-col bg-slate-50">
-    <!-- Header (保持不变) -->
+    <!-- Header -->
     <div class="h-14 px-6 flex items-center justify-between border-b border-zinc-200/80 bg-white">
       <div class="flex items-center gap-3">
-        <button @click="router.back()" class="p-1.5 hover:bg-slate-100 rounded-md transition-colors">
-          <ArrowLeft class="w-4 h-4 text-slate-600" />
-        </button>
+        <AppTooltip :content="t('common.back')" position="top">
+          <button @click="router.back()" class="p-1.5 hover:bg-slate-100 rounded-md transition-colors">
+            <ArrowLeft class="w-4 h-4 text-slate-600" />
+          </button>
+        </AppTooltip>
         <div class="w-px h-5 bg-zinc-200/80"></div>
         <FolderPlus class="w-4 h-4 text-emerald-500" />
         <h2 class="text-sm font-semibold text-slate-800">{{ t('import.title') }}</h2>
@@ -235,7 +239,7 @@ function isPhase(p: Phase): boolean {
     <div class="flex-1 overflow-auto flex items-center justify-center p-8">
       <div class="w-full max-w-2xl">
 
-        <!-- Phase 1 & 2 (保持不变) -->
+        <!-- Phase 1 & 2 -->
         <div v-if="phase === 'select'" class="bg-white border border-zinc-200/80 rounded-md p-8">
           <div class="text-center mb-6">
             <div class="w-14 h-14 bg-emerald-50 rounded-md flex items-center justify-center mx-auto mb-4">
@@ -244,14 +248,20 @@ function isPhase(p: Phase): boolean {
             <h3 class="text-lg font-semibold text-slate-800 mb-1">{{ t('import.selectStep.title') }}</h3>
             <p class="text-xs text-slate-500">{{ t('import.selectStep.description') }}</p>
           </div>
-          <button @click="selectFolder"
-            class="btn btn-primary btn-md w-full">
-            <FolderOpen class="w-4 h-4" /> {{ t('import.selectStep.pickFolder') }}
-          </button>
-          <div v-if="error" class="mt-4 p-3 bg-rose-50 border border-rose-200 rounded-md flex items-start gap-2">
-            <X class="w-4 h-4 text-rose-500 flex-shrink-0 mt-0.5" />
-            <p class="text-xs text-rose-700">{{ error }}</p>
-          </div>
+          <AppTooltip :content="t('import.selectStep.pickFolder')" position="top">
+            <button @click="selectFolder" class="btn btn-primary btn-md w-full">
+              <FolderOpen class="w-4 h-4" /> {{ t('import.selectStep.pickFolder') }}
+            </button>
+          </AppTooltip>
+          <!-- 错误使用 ErrorBanner 替代 -->
+          <AppErrorBanner
+            v-if="error"
+            :message="error"
+            :hint="t('import.selectStep.errorHint')"
+            :actions="[{ label: t('common.retry'), action: selectFolder, variant: 'primary' }]"
+            dismissible
+            @dismiss="error = null"
+          />
           <div class="mt-6 p-3 bg-slate-50 rounded-md">
             <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2">{{ t('import.selectStep.requirements') }}</p>
             <ul class="space-y-1 text-[11px] text-slate-600">
@@ -274,7 +284,7 @@ function isPhase(p: Phase): boolean {
           <p class="text-xs text-slate-500 font-mono truncate">{{ projectPath }}</p>
         </div>
 
-        <!-- Phase 3: Review (Cleaned up) -->
+        <!-- Phase 3: Review -->
         <div v-else-if="phase === 'review' || phase === 'installing'"
           class="bg-white border border-zinc-200/80 rounded-md overflow-hidden">
 
@@ -297,15 +307,17 @@ function isPhase(p: Phase): boolean {
             </div>
             <div class="space-y-2">
               <div>
-                <label class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{{ t('import.reviewStep.projectName') }}</label>
+                <AppTooltip :content="t('import.reviewStep.projectNameHint')" position="top">
+                  <label class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{{ t('import.reviewStep.projectName') }}</label>
+                </AppTooltip>
                 <input v-model="projectName" type="text"
                   class="mt-1 w-full px-3 py-1.5 bg-slate-50 border border-zinc-200/80 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/15 focus:border-brand-500" />
               </div>
               <div>
                 <label class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{{ t('import.reviewStep.projectPath') }}</label>
-                <p
-                  class="mt-1 px-3 py-1.5 bg-slate-50 border border-zinc-200/80 rounded-md text-xs font-mono text-slate-600 truncate">
-                  {{ projectPath }}</p>
+                <AppTooltip :content="projectPath" position="top">
+                  <p class="mt-1 px-3 py-1.5 bg-slate-50 border border-zinc-200/80 rounded-md text-xs font-mono text-slate-600 truncate">{{ projectPath }}</p>
+                </AppTooltip>
               </div>
             </div>
           </div>

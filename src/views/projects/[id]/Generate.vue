@@ -10,7 +10,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import {
   AlertCircle,
   CheckCircle2,
@@ -22,6 +22,7 @@ import {
   Folder,
   FolderOpen,
   Loader2,
+  Play,
   Search,
   Settings2,
   Square,
@@ -35,12 +36,70 @@ import TreeItem from "../../../components/TreeItem.vue";
 import { useI18n } from "vue-i18n";
 import AppButton from "../../../components/ui/AppButton.vue";
 import AppConfirmModal from "../../../components/ui/AppConfirmModal.vue";
+import AppTooltip from "../../../components/ui/AppTooltip.vue";
+import AppContextMenu from "../../../components/ui/AppContextMenu.vue";
+import AppHelpPopover from "../../../components/ui/AppHelpPopover.vue";
 import StatusPill from "../../../components/ui/StatusPill.vue";
 import EnvFixWizard from "../../../components/EnvFixWizard.vue";
+import { useTaskbarProgress } from "../../../composables/useTaskbarProgress";
+import { useWindowTitle } from "../../../composables/useWindowTitle";
+import { notifyGenerationComplete } from "../../../composables/useNotifications";
 
 const route = useRoute();
+const router = useRouter();
 const projectStore = useProjectStore();
 const { t } = useI18n();
+
+const { setProgress: setTaskProgress, clear: clearTaskProgress } = useTaskbarProgress();
+const { setStatus: setWinStatus, reset: resetWinStatus } = useWindowTitle();
+
+/* 右键菜单：源文件树 */
+const sourceMenu = ref<{ path: string; relativePath: string; x: number; y: number } | null>(null);
+function showSourceMenu(node: { path: string; relativePath: string }, e: MouseEvent) {
+  if (isGenerating.value) return;
+  sourceMenu.value = { path: node.path, relativePath: node.relativePath, x: e.clientX, y: e.clientY };
+}
+const sourceMenuItems = computed(() => {
+  if (!sourceMenu.value) return [];
+  const { path, relativePath: rel } = sourceMenu.value;
+  return [
+    {
+      label: t("contextmenu.generateForFile"),
+      icon: WandSparkles,
+      action: () => {
+        if (rel && !selectedSourceFiles.value.includes(rel)) {
+          selectedSourceFiles.value = [rel];
+        }
+        void generateTests();
+      },
+    },
+    { label: t("contextmenu.openInFolder"), icon: FolderOpen, action: () => openFile(path) },
+    { divider: true },
+    { label: t("contextmenu.copyPath"), icon: Copy, action: () => copyPath(path) },
+  ];
+});
+
+/* 右键菜单：生成结果文件 */
+const resultMenu = ref<{ file: GeneratedFile; x: number; y: number } | null>(null);
+function showResultMenu(file: GeneratedFile, e: MouseEvent) {
+  resultMenu.value = { file, x: e.clientX, y: e.clientY };
+}
+const resultMenuItems = computed(() => {
+  if (!resultMenu.value) return [];
+  const f = resultMenu.value.file;
+  if (!f.path) return [];
+  return [
+    { label: t("generate.actions.openFile"), icon: FolderOpen, action: () => openFile(f.path) },
+    { label: t("generate.actions.revealInFolder"), icon: Folder, action: () => revealFile(f.path) },
+    { divider: true },
+    { label: t("contextmenu.copyPath"), icon: Copy, action: () => copyPath(f.path) },
+    {
+      label: t("contextmenu.runThisTest"),
+      icon: Play,
+      action: () => void router.push({ name: "ProjectExecute", params: { id: projectId.value } }),
+    },
+  ];
+});
 
 const projectId = computed(() => Number(route.params.id));
 
@@ -472,6 +531,9 @@ async function setupGenerationListeners() {
       isGenerating.value = true;
       showGenerationLog.value = false;
       logCounter = 0;
+
+      setWinStatus(t("generate.status.generating"));
+      void setTaskProgress(0, event.payload.totalFiles, "indeterminate");
     },
   );
 
@@ -483,6 +545,14 @@ async function setupGenerationListeners() {
       currentFile.value = event.payload.currentFile;
       completedFiles.value = event.payload.completedFiles;
       elapsedTime.value = event.payload.elapsedTime;
+
+      if (event.payload.totalFiles > 0) {
+        void setTaskProgress(
+          event.payload.completedFiles,
+          event.payload.totalFiles,
+          "normal",
+        );
+      }
     },
   );
 
@@ -512,6 +582,21 @@ async function setupGenerationListeners() {
       elapsedTime.value = event.payload.duration;
       generatedFiles.value = event.payload.generatedFiles;
       currentFile.value = null;
+
+      clearTaskProgress();
+      resetWinStatus();
+
+      // 完成后系统通知（长任务在后台时提醒用户）
+      if (currentProject.value?.name) {
+        const okCount = event.payload.generatedFiles.filter(
+          (f) => f.status === "success",
+        ).length;
+        void notifyGenerationComplete(
+          currentProject.value.name,
+          event.payload.success,
+          okCount,
+        );
+      }
 
       if (!event.payload.success && event.payload.generatedFiles.length === 0) {
         generationOutput.value.push({
@@ -974,6 +1059,7 @@ onUnmounted(() => {
                 :disabled="isGenerating"
                 @toggle-dir="toggleDir"
                 @toggle-file="toggleFile"
+                @context-menu="showSourceMenu($event.node, $event.ev)"
               />
             </div>
           </div>
@@ -1018,9 +1104,12 @@ onUnmounted(() => {
 
             <!-- 策略 -->
             <div>
-              <label class="mb-2 block text-xs font-medium text-zinc-700">
-                {{ t("generate.algorithm") }}
-              </label>
+              <div class="mb-2 flex items-center gap-1.5">
+                <label class="block text-xs font-medium text-zinc-700">
+                  {{ t("generate.algorithm") }}
+                </label>
+                <AppHelpPopover :title="t('generate.algorithm')" :content="t('help.algorithm')" />
+              </div>
               <div class="grid grid-cols-2 gap-2">
                 <button
                   v-for="alg in (['MOSA', 'DYNAMOSA', 'WSPA', 'RANDOM'] as Algorithm[])"
@@ -1092,9 +1181,12 @@ onUnmounted(() => {
                 </div>
 
                 <div>
-                  <label class="mb-2 block text-xs font-medium text-zinc-700">
-                    {{ t("generate.chromosomeLength") }}
-                  </label>
+                  <div class="mb-2 flex items-center gap-1.5">
+                    <label class="block text-xs font-medium text-zinc-700">
+                      {{ t("generate.chromosomeLength") }}
+                    </label>
+                    <AppHelpPopover :title="t('generate.chromosomeLength')" :content="t('help.chromosomeLength')" />
+                  </div>
                   <input
                     v-model.number="chromosomeLength"
                     type="number"
@@ -1108,9 +1200,12 @@ onUnmounted(() => {
                 </div>
 
                 <div>
-                  <label class="mb-2 block text-xs font-medium text-zinc-700">
-                    {{ t("generate.populationSize") }}
-                  </label>
+                  <div class="mb-2 flex items-center gap-1.5">
+                    <label class="block text-xs font-medium text-zinc-700">
+                      {{ t("generate.populationSize") }}
+                    </label>
+                    <AppHelpPopover :title="t('generate.populationSize')" :content="t('help.populationSize')" />
+                  </div>
                   <input
                     v-model.number="populationSize"
                     type="number"
@@ -1320,7 +1415,8 @@ onUnmounted(() => {
           <div
             v-for="file in generatedFiles"
             :key="file.path"
-            class="flex flex-wrap items-center gap-3 px-4 py-2.5"
+            class="flex flex-wrap items-center gap-3 px-4 py-2.5 transition-colors hover:bg-zinc-50"
+            @contextmenu.prevent="showResultMenu(file, $event)"
           >
             <component
               :is="getGeneratedFileIcon(file.status)"
@@ -1340,30 +1436,33 @@ onUnmounted(() => {
               {{ t("generate.results.testCases", { count: file.testCaseCount }) }}
             </span>
             <div class="flex shrink-0 items-center gap-1">
-              <button
-                type="button"
-                class="rounded-lg p-1.5 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
-                :title="t('generate.actions.openFile')"
-                @click="openFile(file.path)"
-              >
-                <FolderOpen class="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                class="rounded-lg p-1.5 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
-                :title="t('generate.actions.revealInFolder')"
-                @click="revealFile(file.path)"
-              >
-                <Folder class="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                class="rounded-lg p-1.5 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
-                :title="t('generate.actions.copyPath')"
-                @click="copyPath(file.path)"
-              >
-                <Copy class="h-3.5 w-3.5" />
-              </button>
+              <AppTooltip :content="t('generate.actions.openFile')" position="top">
+                <button
+                  type="button"
+                  class="rounded-lg p-1.5 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
+                  @click="openFile(file.path)"
+                >
+                  <FolderOpen class="h-3.5 w-3.5" />
+                </button>
+              </AppTooltip>
+              <AppTooltip :content="t('generate.actions.revealInFolder')" position="top">
+                <button
+                  type="button"
+                  class="rounded-lg p-1.5 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
+                  @click="revealFile(file.path)"
+                >
+                  <Folder class="h-3.5 w-3.5" />
+                </button>
+              </AppTooltip>
+              <AppTooltip :content="t('generate.actions.copyPath')" position="top">
+                <button
+                  type="button"
+                  class="rounded-lg p-1.5 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
+                  @click="copyPath(file.path)"
+                >
+                  <Copy class="h-3.5 w-3.5" />
+                </button>
+              </AppTooltip>
             </div>
           </div>
         </div>
@@ -1386,5 +1485,21 @@ onUnmounted(() => {
         <li v-for="f in bomFiles" :key="f">{{ f }}</li>
       </ul>
     </AppConfirmModal>
+
+    <!-- 源文件树右键菜单 -->
+    <AppContextMenu
+      v-if="sourceMenu"
+      :items="sourceMenuItems"
+      :open="!!sourceMenu"
+      @close="sourceMenu = null"
+    />
+
+    <!-- 生成结果右键菜单 -->
+    <AppContextMenu
+      v-if="resultMenu"
+      :items="resultMenuItems"
+      :open="!!resultMenu"
+      @close="resultMenu = null"
+    />
   </div>
 </template>
