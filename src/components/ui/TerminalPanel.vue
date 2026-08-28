@@ -318,7 +318,7 @@ defineExpose({ toggle: toggleExpanded });
           v-else
           ref="bodyEl"
           class="h-full overflow-auto px-3 py-2 font-mono text-[11px] leading-5"
-          :class="wrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'"
+          :class="wrap ? 'whitespace-pre-wrap wrap-break-word' : 'whitespace-pre'"
           @scroll="onBodyScroll"
         >
           <template v-for="output in lines" :key="output.logId ?? `${output.stream}-${output.line}`">

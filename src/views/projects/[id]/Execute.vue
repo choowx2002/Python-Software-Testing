@@ -1865,7 +1865,7 @@ function onFocusSearch() {
                     </button>
                   </div>
                   <pre
-                    class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-rose-800"
+                    class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-5 text-rose-800"
                     >{{ result.errorMessage }}</pre
                   >
                 </div>

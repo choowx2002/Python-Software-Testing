@@ -24,7 +24,7 @@ const uiStore = useUIStore();
     <div class="flex h-14 shrink-0 items-center gap-2.5 border-b border-border px-4">
       <slot name="brand">
         <div class="flex h-6 w-6 items-center justify-center overflow-hidden rounded-md bg-brand-500">
-          <img src="/src/assets/app-icon-sm.png" alt="" class="h-4 w-4" />
+          <img src="/src/assets/app-icon-sm.png" alt="" class="h-full w-full" />
         </div>
         <div class="min-w-0 leading-tight">
           <div class="text-[13px] font-semibold text-zinc-900">{{ t("app.name") }}</div>

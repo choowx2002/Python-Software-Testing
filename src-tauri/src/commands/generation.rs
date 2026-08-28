@@ -444,6 +444,60 @@ pub async fn generate_tests(
         let success = status.as_ref().map(|s| s.success()).unwrap_or(false);
         last_exit_code = status.as_ref().ok().and_then(|s| s.code());
 
+        // ── 生成后重命名：把 test_case_n 模板名改成语义化名字 ──
+        // 见 scripts/rename_generated_tests.py；失败只告警，不影响生成结果。
+        if success {
+            if let Some(rename_script) = locate_generation_rename_script() {
+                let rename_result = AsyncCommand::new(&interpreter)
+                    .current_dir(&project)
+                    .args([
+                        rename_script.to_string_lossy().to_string(),
+                        module_output_dir.to_string_lossy().to_string(),
+                        module_name.clone(),
+                    ])
+                    .output()
+                    .await;
+                match rename_result {
+                    Ok(out) if out.status.success() => {
+                        let summary = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                        if !summary.is_empty() {
+                            let _ = app_handle.emit(
+                                "generation-output",
+                                GenerationOutputEvent {
+                                    run_id: run_id.clone(),
+                                    stream: "stdout".to_string(),
+                                    line: format!("[Rename] {}", summary),
+                                },
+                            );
+                        }
+                    }
+                    Ok(out) => {
+                        let _ = app_handle.emit(
+                            "generation-output",
+                            GenerationOutputEvent {
+                                run_id: run_id.clone(),
+                                stream: "stderr".to_string(),
+                                line: format!(
+                                    "[Rename] 重命名失败（不影响生成结果）: {}",
+                                    String::from_utf8_lossy(&out.stderr).trim()
+                                ),
+                            },
+                        );
+                    }
+                    Err(e) => {
+                        let _ = app_handle.emit(
+                            "generation-output",
+                            GenerationOutputEvent {
+                                run_id: run_id.clone(),
+                                stream: "stderr".to_string(),
+                                line: format!("[Rename] 无法运行重命名脚本: {}", e),
+                            },
+                        );
+                    }
+                }
+            }
+        }
+
         // Scan output directory for generated test files
         let mut module_generated: Vec<GeneratedFile> = Vec::new();
 
@@ -546,6 +600,16 @@ fn count_test_cases(path: &Path) -> usize {
             trimmed.starts_with("def test_") || trimmed.starts_with("async def test_")
         })
         .count()
+}
+
+/// 定位生成后重命名脚本 scripts/rename_generated_tests.py。
+/// 优先按 CARGO_MANIFEST_DIR 解析（开发构建），其次回退到当前工作目录。
+fn locate_generation_rename_script() -> Option<PathBuf> {
+    let candidates = [
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/rename_generated_tests.py"),
+        PathBuf::from("scripts/rename_generated_tests.py"),
+    ];
+    candidates.into_iter().find(|p| p.is_file())
 }
 
 // ============================================

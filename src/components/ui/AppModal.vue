@@ -68,7 +68,7 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKeydown));
           role="dialog"
           aria-modal="true"
           :aria-labelledby="title ? 'app-modal-title' : undefined"
-          class="modal-panel w-full rounded-xl bg-white shadow-xl"
+          class="modal-panel w-full rounded-xl bg-white shadow-xl max-h-[90vh]"
           :class="width"
         >
           <!-- 标题栏 -->
@@ -89,7 +89,7 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKeydown));
           </header>
 
           <!-- 正文 -->
-          <div class="px-5 py-4"><slot /></div>
+          <div class="px-5 py-4 overflow-auto max-h-[50vh]"><slot /></div>
 
           <!-- 底部操作区（可选） -->
           <footer
