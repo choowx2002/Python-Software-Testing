@@ -245,3 +245,9 @@ pub async fn get_coverage_history_files(
 ) -> Result<Option<Vec<crate::commands::coverage::FileCoverage>>, String> {
     crate::db::get_coverage_history_files(&app, history_id).await
 }
+
+/// 清空所有历史记录（测试执行、生成、覆盖率、明细）
+#[tauri::command]
+pub async fn clear_all_history(app: tauri::AppHandle) -> Result<(), String> {
+    crate::db::clear_all_history(&app).await
+}

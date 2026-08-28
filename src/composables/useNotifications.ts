@@ -3,6 +3,7 @@ import {
   requestPermission,
   sendNotification,
 } from '@tauri-apps/plugin-notification'
+import { useUIStore } from '../stores/uiStore'
 
 let permissionGranted: boolean | null = null
 
@@ -24,6 +25,10 @@ export async function requestNotificationPermission(): Promise<boolean> {
 }
 
 export async function notify(title: string, body: string, _options?: { onClick?: () => void }) {
+  // 检查用户是否启用了通知
+  const uiStore = useUIStore()
+  if (!uiStore.notificationsEnabled) return
+
   const granted = await requestNotificationPermission()
   if (!granted) return
   // In Tauri v2, clicking a notification brings the app window to focus by default.

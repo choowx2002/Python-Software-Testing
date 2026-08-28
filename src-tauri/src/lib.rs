@@ -123,6 +123,7 @@ pub fn run() {
             commands::db_commands::save_generation_file_details,
             commands::db_commands::list_generation_file_details,
             commands::db_commands::get_coverage_history_files,
+            commands::db_commands::clear_all_history,
             commands::window::set_taskbar_progress,
         ])
         .build(tauri::generate_context!())

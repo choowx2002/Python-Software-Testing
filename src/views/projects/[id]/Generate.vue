@@ -43,10 +43,12 @@ import AppConfirmModal from "../../../components/ui/AppConfirmModal.vue";
 import AppTooltip from "../../../components/ui/AppTooltip.vue";
 import AppContextMenu from "../../../components/ui/AppContextMenu.vue";
 import AppHelpPopover from "../../../components/ui/AppHelpPopover.vue";
+import TerminalPanel from "../../../components/ui/TerminalPanel.vue";
 import StatusPill from "../../../components/ui/StatusPill.vue";
 import EnvFixWizard from "../../../components/EnvFixWizard.vue";
 import { useTaskbarProgress } from "../../../composables/useTaskbarProgress";
 import { useWindowTitle } from "../../../composables/useWindowTitle";
+import { usePageShortcuts } from "../../../composables/useKeyboardShortcuts";
 import { notifyGenerationComplete } from "../../../composables/useNotifications";
 
 const route = useRoute();
@@ -197,7 +199,6 @@ const chromosomeLength = ref(40);
 const populationSize = ref(50);
 
 const generationOutput = ref<GenerationOutputEvent[]>([]);
-const showGenerationLog = ref(false);
 
 /* UTF-8 BOM 检测（Pynguin 无法解析带 BOM 的源码） */
 const bomFiles = ref<string[]>([]);
@@ -533,7 +534,6 @@ async function setupGenerationListeners() {
       generationOutput.value = [];
       generationStatus.value = "running";
       isGenerating.value = true;
-      showGenerationLog.value = false;
       logCounter = 0;
 
       setWinStatus(t("generate.status.generating"));
@@ -609,7 +609,6 @@ async function setupGenerationListeners() {
           line: t("generate.logs.systemWarning"),
           logId: logCounter++,
         });
-        showGenerationLog.value = true;
       }
 
       // 持久化生成历史（NFR008：走 Rust 类型化命令）+ 文件明细
@@ -772,7 +771,6 @@ async function startGeneration(projectPath: string, interpreterPath: string) {
       line: t("generate.logs.fatalStart", { msg: errorMsg }),
       logId: logCounter++,
     });
-    showGenerationLog.value = true;
   }
 }
 
@@ -802,7 +800,6 @@ function resetGenerationState() {
   generatedFiles.value = [];
   generationOutput.value = [];
   generationStatus.value = "idle";
-  showGenerationLog.value = false;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -860,21 +857,8 @@ async function previewFile(path: string) {
   }
 }
 
-async function copyLogs() {
-  if (generationOutput.value.length === 0) return;
-
-  const text = generationOutput.value.map((o) => o.line).join("\n");
-
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch (error) {
-    console.error("[Generate] Failed to copy logs:", error);
-  }
-}
-
 function clearOutput() {
   generationOutput.value = [];
-  showGenerationLog.value = false;
 }
 
 function getGeneratedFileIcon(status: GeneratedFile["status"]) {
@@ -944,6 +928,14 @@ onMounted(() => {
   window.addEventListener('testmate:focus-search', onFocusSearch);
 });
 
+// Ctrl+` 展开/收起终端
+usePageShortcuts(
+  { 'ctrl+`': () => terminalRef.value?.toggle() },
+  () => !isGenerating,
+);
+
+const terminalRef = ref<InstanceType<typeof TerminalPanel> | null>(null);
+
 onUnmounted(() => {
   unlistenStarted?.();
   unlistenProgress?.();
@@ -959,7 +951,9 @@ function onFocusSearch() {
 </script>
 
 <template>
-  <div class="flex min-h-full flex-col gap-4 p-5">
+  <div class="flex h-full min-h-0 gap-4 p-5">
+    <!-- 左：主内容 -->
+    <div class="flex min-w-0 flex-1 flex-col gap-4 overflow-auto">
     <!-- 页头 -->
     <header class="flex items-start justify-between gap-4">
       <div class="min-w-0">
@@ -1368,39 +1362,6 @@ function onFocusSearch() {
         </div>
       </div>
 
-      <!-- 终端日志（运行中自动显示） -->
-      <div v-if="isGenerating || generationOutput.length > 0" class="border-t border-border">
-        <div class="flex items-center justify-between gap-3 bg-zinc-950 px-4 py-2">
-          <span class="truncate font-mono text-[10px] text-zinc-400">
-            {{ t("generate.logLines", { count: generationOutput.length }) }}
-          </span>
-          <div class="flex shrink-0 items-center gap-1">
-            <button
-              type="button"
-              class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
-              @click="copyLogs"
-            >
-              <Copy class="h-3 w-3" />
-              {{ t("common.copy") }}
-            </button>
-            <button
-              type="button"
-              class="rounded-md px-2 py-1 text-[11px] font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
-              @click="clearOutput"
-            >
-              {{ t("common.clear") }}
-            </button>
-          </div>
-        </div>
-        <pre class="max-h-56 overflow-auto bg-zinc-950 px-4 py-3 font-mono text-[11px] leading-5">
-          <template v-for="output in generationOutput" :key="output.logId">
-            <span :class="output.stream === 'stderr' ? 'text-rose-300' : 'text-zinc-300'">{{
-              output.line
-            }}</span>{{ "\n" }}
-          </template>
-        </pre>
-      </div>
-
       <!-- 结果（完成） -->
       <div v-if="hasResult" class="border-t border-border px-5 py-4">
         <!-- Pynguin / Python 3.12 兼容性问题警告 -->
@@ -1539,6 +1500,7 @@ function onFocusSearch() {
         </div>
       </div>
     </section>
+    </div><!-- /左：主内容 -->
 
     <!-- UTF-8 BOM 确认弹窗：无损移除后继续生成 -->
     <AppConfirmModal
@@ -1611,5 +1573,15 @@ function onFocusSearch() {
         </div>
       </div>
     </AppModal>
+
+    <!-- 终端右侧面板 -->
+    <TerminalPanel
+      ref="terminalRef"
+      :title="t('generate.logTitle')"
+      :lines="generationOutput"
+      :active="isGenerating"
+      width-key="generate"
+      @clear="clearOutput"
+    />
   </div>
 </template>

@@ -218,9 +218,9 @@ pub async fn get_projects(app: &AppHandle) -> Result<Vec<ProjectRow>, String> {
     let rows = sqlx::query(
         "SELECT
             p.id, p.name, p.project_path, p.interpreter_path, p.status,
-            COALESCE((SELECT SUM(passed) FROM test_execution_history t WHERE t.project_id = p.id), 0) AS tests_passed,
-            COALESCE((SELECT SUM(failed) FROM test_execution_history t WHERE t.project_id = p.id), 0) AS tests_failed,
-            (SELECT MAX(executed_at) FROM test_execution_history t WHERE t.project_id = p.id) AS last_run,
+            COALESCE((SELECT t.passed FROM test_execution_history t WHERE t.project_id = p.id ORDER BY t.id DESC LIMIT 1), 0) AS tests_passed,
+            COALESCE((SELECT t.failed FROM test_execution_history t WHERE t.project_id = p.id ORDER BY t.id DESC LIMIT 1), 0) AS tests_failed,
+            (SELECT t.executed_at FROM test_execution_history t WHERE t.project_id = p.id ORDER BY t.id DESC LIMIT 1) AS last_run,
             CAST(COALESCE((SELECT c.total_statement_coverage
                        FROM coverage_results c
                        WHERE c.project_id = p.id
@@ -994,15 +994,15 @@ mod tests {
         let rows = sqlx::query(
             "SELECT
                 p.id, p.name, p.project_path, p.interpreter_path, p.status,
-                COALESCE((SELECT SUM(passed) FROM test_execution_history t WHERE t.project_id = p.id), 0) AS tests_passed,
-                COALESCE((SELECT SUM(failed) FROM test_execution_history t WHERE t.project_id = p.id), 0) AS tests_failed,
-                (SELECT MAX(executed_at) FROM test_execution_history t WHERE t.project_id = p.id) AS last_run,
+                COALESCE((SELECT t.passed FROM test_execution_history t WHERE t.project_id = p.id ORDER BY t.id DESC LIMIT 1), 0) AS tests_passed,
+                COALESCE((SELECT t.failed FROM test_execution_history t WHERE t.project_id = p.id ORDER BY t.id DESC LIMIT 1), 0) AS tests_failed,
+                (SELECT t.executed_at FROM test_execution_history t WHERE t.project_id = p.id ORDER BY t.id DESC LIMIT 1) AS last_run,
                 CAST(COALESCE((SELECT c.total_statement_coverage
                            FROM coverage_results c
                            WHERE c.project_id = p.id
                            ORDER BY c.id DESC LIMIT 1), 0) AS REAL) AS coverage
-              FROM projects p
-              ORDER BY p.created_at DESC",
+             FROM projects p
+             ORDER BY p.created_at DESC",
         )
         .fetch_all(&db)
         .await
@@ -1079,4 +1079,59 @@ mod tests {
             .expect("avg_coverage must decode as f64");
         assert_eq!(avg_coverage, 0.0);
     }
+}
+
+/// 清空所有历史记录（测试执行、生成、覆盖率、明细）
+pub async fn clear_all_history(app: &AppHandle) -> Result<(), String> {
+    let db = pool(app).await?;
+    let mut tx = db
+        .begin()
+        .await
+        .map_err(|e| format!("Failed to begin transaction: {}", e))?;
+
+    sqlx::query("DELETE FROM execution_result_details")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to delete execution result details: {}", e))?;
+
+    sqlx::query("DELETE FROM generation_file_details")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to delete generation file details: {}", e))?;
+
+    sqlx::query("DELETE FROM test_execution_history")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to delete execution history: {}", e))?;
+
+    sqlx::query("DELETE FROM coverage_results")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to delete coverage results: {}", e))?;
+
+    sqlx::query("DELETE FROM coverage_history")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to delete coverage history: {}", e))?;
+
+    sqlx::query("DELETE FROM generation_history")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to delete generation history: {}", e))?;
+
+    sqlx::query("DELETE FROM generation_file_details")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to delete generation file details: {}", e))?;
+
+    sqlx::query("DELETE FROM regression_suites")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to delete regression suites: {}", e))?;
+
+    tx.commit()
+        .await
+        .map_err(|e| format!("Failed to commit clear all history: {}", e))?;
+
+    Ok(())
 }

@@ -15,22 +15,17 @@ import { useI18n } from "vue-i18n";
 import { useProjectStore, type Project } from "../stores/projectStore";
 import { useUIStore } from "../stores/uiStore";
 import {
-  ArrowDown,
-  ArrowUp,
   BookOpen,
   Bug,
   Code2,
-  Database,
+  ExternalLink,
   FolderPlus,
   GitBranch,
   Loader2,
   Search,
-  Sparkles,
+  Settings,
   Terminal,
   Trash2,
-  Edit,
-  Copy,
-  ExternalLink,
 } from "@lucide/vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import AppSidebar from "../components/AppSidebar.vue";
@@ -387,15 +382,6 @@ const coverageTone = (coverage: number) =>
             @click="openCloneModal"
           />
         </AppTooltip>
-        <AppTooltip :content="t('dashboard.comingSoon')" position="right">
-          <AppNavItem
-            :icon="Sparkles"
-            :label="t('dashboard.aiTestGenerator')"
-            description="Pynguin"
-            disabled
-            :title="t('dashboard.comingSoon')"
-          />
-        </AppTooltip>
       </div>
 
       <p class="section-label mb-1.5 mt-5">Resources</p>
@@ -408,10 +394,10 @@ const coverageTone = (coverage: number) =>
         </AppTooltip>
       </div>
 
-      <p class="section-label mb-1.5 mt-5">Debug</p>
+      <p class="section-label mb-1.5 mt-5">Settings</p>
       <div class="space-y-0.5">
-        <AppTooltip :content="t('dashboard.viewDbSchema')" position="right">
-          <AppNavItem :icon="Database" label="View DB Schema" @click="router.push('/debug/schema')" />
+        <AppTooltip :content="t('dashboard.settings')" position="right">
+          <AppNavItem :icon="Settings" label="Settings" @click="router.push('/settings')" />
         </AppTooltip>
       </div>
     </AppSidebar>

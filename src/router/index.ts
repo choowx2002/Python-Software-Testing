@@ -14,9 +14,9 @@ const router = createRouter({
       component: () => import("@/views/projects/Import.vue"),
     },
     {
-      path: "/debug/schema",
-      name: "DatabaseSchema",
-      component: () => import("@/components/DatabaseSchemaViewer.vue"),
+      path: "/settings",
+      name: "Settings",
+      component: () => import("@/views/Settings.vue"),
     },
     {
       path: "/projects/:id",

@@ -43,6 +43,7 @@ import AppConfirmModal from "../../../components/ui/AppConfirmModal.vue";
 import AppTooltip from "../../../components/ui/AppTooltip.vue";
 import AppContextMenu from "../../../components/ui/AppContextMenu.vue";
 import AppHelpPopover from "../../../components/ui/AppHelpPopover.vue";
+import TerminalPanel from "../../../components/ui/TerminalPanel.vue";
 import StatusPill from "../../../components/ui/StatusPill.vue";
 import { useTaskbarProgress } from "../../../composables/useTaskbarProgress";
 import { useWindowTitle } from "../../../composables/useWindowTitle";
@@ -216,7 +217,6 @@ const showAdvanced = ref(false);
 const customArguments = ref("");
 
 const pytestOutput = ref<TestOutputEvent[]>([]);
-const showPytestOutput = ref(false);
 
 const currentRunId = ref<string | null>(null);
 const currentTest = ref<string | null>(null);
@@ -240,9 +240,6 @@ const postRunSummary = ref<{
   skipped: number;
   duration: number;
 } | null>(null);
-
-/* 终端日志容器（自动滚动到底部） */
-const logContainer = ref<HTMLElement | null>(null);
 
 let unlistenStarted: UnlistenFn | undefined;
 let unlistenOutput: UnlistenFn | undefined;
@@ -575,7 +572,6 @@ async function setupTestListeners() {
 
     executionStatus.value = "running";
     isRunning.value = true;
-    showPytestOutput.value = false;
     logCounter = 0;
 
     setWinStatus(t("execute.results.statusRunning"));
@@ -661,7 +657,6 @@ async function setupTestListeners() {
           line: t("execute.logs.systemWarning"),
           logId: logCounter++,
         });
-        showPytestOutput.value = true;
       }
     },
   );
@@ -907,7 +902,6 @@ async function runTests() {
       line: t("execute.logs.fatalStart", { msg: errorMsg }),
       logId: logCounter++,
     });
-    showPytestOutput.value = true;
   }
 }
 
@@ -930,7 +924,6 @@ function resetExecutionState() {
   expandedFailures.value = new Set();
 
   executionStatus.value = "idle";
-  showPytestOutput.value = false;
 }
 
 /**
@@ -1218,23 +1211,8 @@ async function copyError(message: string | null) {
   }
 }
 
-async function copyLogs() {
-  if (pytestOutput.value.length === 0) {
-    return;
-  }
-
-  const text = pytestOutput.value.map((output) => output.line).join("\n");
-
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch (error) {
-    console.error("[Execute] Failed to copy pytest output:", error);
-  }
-}
-
 function clearOutput() {
   pytestOutput.value = [];
-  showPytestOutput.value = false;
 }
 
 async function openResultFile(result: TestResult) {
@@ -1294,15 +1272,6 @@ watch(
   },
 );
 
-/* 终端日志自动滚动到底部 */
-watch(
-  () => pytestOutput.value.length,
-  async () => {
-    await nextTick();
-    logContainer.value?.scrollTo({ top: logContainer.value.scrollHeight });
-  },
-);
-
 onMounted(() => {
   void setupTestListeners();
   window.addEventListener('testmate:focus-search', onFocusSearch);
@@ -1314,9 +1283,12 @@ usePageShortcuts(
     'ctrl+enter': () => {
       if (canRun.value) void runTests();
     },
+    'ctrl+`': () => terminalRef.value?.toggle(),
   },
   () => !isRunning.value && testScope.value !== 'suite',
 );
+
+const terminalRef = ref<InstanceType<typeof TerminalPanel> | null>(null);
 
 onUnmounted(() => {
   unlistenStarted?.();
@@ -1332,7 +1304,9 @@ function onFocusSearch() {
 </script>
 
 <template>
-  <div class="flex min-h-full flex-col gap-4 p-5">
+  <div class="flex h-full min-h-0 gap-4 p-5">
+    <!-- 左：主内容 -->
+    <div class="flex min-w-0 flex-1 flex-col gap-4 overflow-auto">
     <!-- 页头 -->
     <header class="flex items-start justify-between gap-4">
       <div class="min-w-0">
@@ -1732,43 +1706,6 @@ function onFocusSearch() {
           </div>
         </div>
 
-        <!-- 终端日志（运行中自动显示，自动滚动） -->
-        <div v-if="isRunning || pytestOutput.length > 0">
-          <div class="flex items-center justify-between gap-3 bg-zinc-950 px-4 py-2">
-            <span class="truncate font-mono text-[10px] text-zinc-400">
-              {{ t("execute.output.title") }} ·
-              {{ t("execute.output.logLines", { count: pytestOutput.length }) }}
-            </span>
-            <div class="flex shrink-0 items-center gap-1">
-              <button
-                type="button"
-                class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
-                @click="copyLogs"
-              >
-                <Copy class="h-3 w-3" />
-                {{ t("common.copy") }}
-              </button>
-              <button
-                type="button"
-                class="rounded-md px-2 py-1 text-[11px] font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
-                @click="clearOutput"
-              >
-                {{ t("common.clear") }}
-              </button>
-            </div>
-          </div>
-          <pre
-            ref="logContainer"
-            class="max-h-64 overflow-auto bg-zinc-950 px-4 py-3 font-mono text-[11px] leading-5"
-          >
-            <template v-for="output in pytestOutput" :key="output.logId">
-              <span :class="output.stream === 'stderr' ? 'text-rose-300' : 'text-zinc-300'">{{
-                output.line
-              }}</span>{{ "\n" }}
-            </template>
-          </pre>
-        </div>
-
         <!-- 完成：结论横幅 + 统计 + 结果列表 -->
         <div v-if="hasResult" class="px-5 py-4">
           <div
@@ -1942,6 +1879,7 @@ function onFocusSearch() {
         </div>
       </template>
     </section>
+    </div><!-- /左：主内容 -->
 
     <!-- Save Selection Modal（统一 AppModal） -->
     <AppModal
@@ -2038,6 +1976,16 @@ function onFocusSearch() {
       :items="resultMenuItems"
       :open="!!resultMenu"
       @close="resultMenu = null"
+    />
+
+    <!-- 终端右侧面板 -->
+    <TerminalPanel
+      ref="terminalRef"
+      :title="t('execute.output.title')"
+      :lines="pytestOutput"
+      :active="isRunning"
+      width-key="execute"
+      @clear="clearOutput"
     />
   </div>
 </template>

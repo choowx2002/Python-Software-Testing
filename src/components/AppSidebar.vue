@@ -47,26 +47,5 @@ function switchLocale(lang: "en" | "zh") {
     <div v-if="$slots.footer" class="shrink-0 border-t border-border px-2.5 py-2.5">
       <slot name="footer" />
     </div>
-
-    <!-- 底部栏：版本 + 语言切换 -->
-    <div class="flex shrink-0 items-center justify-between border-t border-border px-4 py-2.5">
-      <span class="font-mono text-[10px] text-zinc-400">v1.2.0</span>
-      <div class="flex items-center gap-0.5 rounded-md border border-border p-0.5">
-        <button
-          v-for="lang in (['en', 'zh'] as const)"
-          :key="lang"
-          type="button"
-          class="rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors"
-          :class="
-            currentLocale === lang
-              ? 'bg-brand-500 text-white'
-              : 'text-zinc-500 hover:bg-zinc-100'
-          "
-          @click="switchLocale(lang)"
-        >
-          {{ lang === "en" ? "EN" : "中文" }}
-        </button>
-      </div>
-    </div>
   </aside>
 </template>

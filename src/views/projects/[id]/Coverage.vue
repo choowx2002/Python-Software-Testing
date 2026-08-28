@@ -7,7 +7,7 @@
  *   ③ 导出与日志收进结果卡底部
  * 所有业务逻辑（coverage 事件流 / 扫描 / 详情缓存 / 导出 / 历史持久化）保持不变。
  */
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useRoute, useRouter } from "vue-router";
@@ -36,9 +36,11 @@ import { useI18n } from "vue-i18n";
 import AppButton from "../../../components/ui/AppButton.vue";
 import AppContextMenu from "../../../components/ui/AppContextMenu.vue";
 import AppHelpPopover from "../../../components/ui/AppHelpPopover.vue";
+import TerminalPanel from "../../../components/ui/TerminalPanel.vue";
 import StatusPill from "../../../components/ui/StatusPill.vue";
 import { useTaskbarProgress } from "../../../composables/useTaskbarProgress";
 import { useWindowTitle } from "../../../composables/useWindowTitle";
+import { usePageShortcuts } from "../../../composables/useKeyboardShortcuts";
 import { notifyCoverageComplete } from "../../../composables/useNotifications";
 
 const route = useRoute();
@@ -311,8 +313,6 @@ const filteredDetailLines = computed(() => {
 });
 
 const coverageOutput = ref<CoverageOutputEvent[]>([]);
-const showCoverageLog = ref(false);
-const logContainer = ref<HTMLElement | null>(null);
 
 const errorMessage = ref<InterpretedError | null>(null);
 
@@ -711,7 +711,6 @@ async function setupCoverageListeners() {
       detailError.value = null;
       executionDuration.value = 0;
       coverageOutput.value = [];
-      showCoverageLog.value = false;
       logCounter = 0;
 
       setWinStatus(t("coverage.status.running"));
@@ -772,10 +771,6 @@ async function setupCoverageListeners() {
             : t("coverage.logs.systemWarning"),
           logId: logCounter++,
         });
-
-        if (!event.payload.summary) {
-          showCoverageLog.value = true;
-        }
       }
 
       // 持久化覆盖率运行历史（NFR008：走 Rust 类型化命令）
@@ -811,7 +806,6 @@ async function setupCoverageListeners() {
         line: t("coverage.logs.coverageError", { msg: event.payload.message }),
         logId: logCounter++,
       });
-      showCoverageLog.value = true;
     },
   );
 }
@@ -979,7 +973,6 @@ async function runCoverage() {
       line: t("coverage.logs.fatalStart", { msg: rawMsg }),
       logId: logCounter++,
     });
-    showCoverageLog.value = true;
   }
 }
 
@@ -993,7 +986,6 @@ function resetRunState() {
   coverageOutput.value = [];
   errorMessage.value = null;
   coverageStatus.value = "idle";
-  showCoverageLog.value = false;
 }
 
 /**
@@ -1122,32 +1114,11 @@ async function openSourceFile(file: FileCoverage) {
 /* Logs                                                                       */
 /* -------------------------------------------------------------------------- */
 
-async function copyLogs() {
-  if (coverageOutput.value.length === 0) return;
-
-  const text = coverageOutput.value.map((output) => output.line).join("\n");
-
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch (error) {
-    console.error("[Coverage] Failed to copy logs:", error);
-  }
-}
-
 function clearOutput() {
   coverageOutput.value = [];
-  showCoverageLog.value = false;
 }
 
-watch(
-  () => coverageOutput.value.length,
-  async () => {
-    await nextTick();
-    if (logContainer.value) {
-      logContainer.value.scrollTop = logContainer.value.scrollHeight;
-    }
-  },
-);
+/* 自动滚动已由 TerminalPanel 内部处理 */
 
 /* -------------------------------------------------------------------------- */
 /* Watchers / lifecycle                                                       */
@@ -1192,6 +1163,14 @@ onMounted(() => {
   window.addEventListener('testmate:focus-search', onFocusSearch);
 });
 
+// Ctrl+` 展开/收起终端
+usePageShortcuts(
+  { 'ctrl+`': () => terminalRef.value?.toggle() },
+  () => !isRunning,
+);
+
+const terminalRef = ref<InstanceType<typeof TerminalPanel> | null>(null);
+
 onUnmounted(() => {
   unlistenStarted?.();
   unlistenOutput?.();
@@ -1207,7 +1186,9 @@ function onFocusSearch() {
 </script>
 
 <template>
-  <div class="flex min-h-full flex-col gap-4 p-5">
+  <div class="flex h-full min-h-0 gap-4 p-5">
+    <!-- 左：主内容 -->
+    <div class="flex min-w-0 flex-1 flex-col gap-4 overflow-auto">
     <!-- 页头 -->
     <header class="flex items-start justify-between gap-4">
       <div class="min-w-0">
@@ -1737,54 +1718,9 @@ function onFocusSearch() {
             {{ exportMessage }}
           </span>
         </div>
-
-        <button
-          type="button"
-          class="flex items-center gap-1.5 text-xs font-medium text-zinc-500 transition hover:text-zinc-800"
-          @click="showCoverageLog = !showCoverageLog"
-        >
-          <ChevronDown v-if="showCoverageLog" class="h-3.5 w-3.5" />
-          <ChevronRight v-else class="h-3.5 w-3.5" />
-          {{ t("coverage.outputTitle") }} ({{ coverageOutput.length }})
-        </button>
-      </div>
-
-      <!-- 日志 -->
-      <div v-if="showCoverageLog && coverageOutput.length > 0" class="border-t border-border">
-        <div class="flex items-center justify-between gap-3 bg-zinc-950 px-4 py-2">
-          <span class="truncate font-mono text-[10px] text-zinc-400">
-            {{ t("coverage.logLines", { count: coverageOutput.length }) }}
-          </span>
-          <div class="flex shrink-0 items-center gap-1">
-            <button
-              type="button"
-              class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
-              @click="copyLogs"
-            >
-              <Copy class="h-3 w-3" />
-              {{ t("common.copy") }}
-            </button>
-            <button
-              type="button"
-              class="rounded-md px-2 py-1 text-[11px] font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
-              @click="clearOutput"
-            >
-              {{ t("common.clear") }}
-            </button>
-          </div>
         </div>
-        <pre
-          ref="logContainer"
-          class="max-h-56 overflow-auto bg-zinc-950 px-4 py-3 font-mono text-[11px] leading-5"
-        >
-          <template v-for="output in coverageOutput" :key="output.logId">
-            <span :class="output.stream === 'stderr' ? 'text-rose-300' : 'text-zinc-300'">{{
-              output.line
-            }}</span>{{ "\n" }}
-          </template>
-        </pre>
-      </div>
     </section>
+    </div><!-- /左：主内容 -->
 
     <!-- 文件列表右键菜单 -->
     <AppContextMenu
@@ -1792,6 +1728,16 @@ function onFocusSearch() {
       :items="fileMenuItems"
       :open="!!fileMenu"
       @close="fileMenu = null"
+    />
+
+    <!-- 终端右侧面板 -->
+    <TerminalPanel
+      ref="terminalRef"
+      :title="t('coverage.outputTitle')"
+      :lines="coverageOutput"
+      :active="isRunning"
+      width-key="coverage"
+      @clear="clearOutput"
     />
   </div>
 </template>
