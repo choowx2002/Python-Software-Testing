@@ -7,13 +7,13 @@ export const useUIStore = defineStore('ui', {
     sidebarCollapsed: false,
     dashboardSortDesc: true,
     projectColWidths: [3, 1.2, 1.3, 1.6, 1] as number[],
+    lastTabByProject: {} as Record<number, string>,
     /** 终端面板宽度（相对窗口的比例，0~1） */
     terminalWidths: {} as Record<string, number>,
     /** 终端主题：true=深色，false=浅色（默认） */
     terminalDark: false,
     /** 系统通知开关：true=开启（默认），false=关闭 */
     notificationsEnabled: true,
-    setNotificationsEnabled(enabled: boolean) { this.notificationsEnabled = enabled },
     /** 待重跑的失败用例（由历史详情跳转到 Execute 页自动选中并运行） */
     pendingRerunProjectId: null as number | null,
     pendingRerunTestIds: [] as string[]
@@ -25,10 +25,10 @@ export const useUIStore = defineStore('ui', {
     setDashboardSort(desc: boolean) { this.dashboardSortDesc = desc },
     setProjectColWidths(ratios: number[]) { this.projectColWidths = ratios },
     setTerminalWidth(key: string, ratio: number) { this.terminalWidths[key] = ratio },
+    setTerminalDark(v: boolean) { this.terminalDark = v },
+    setNotificationsEnabled(enabled: boolean) { this.notificationsEnabled = enabled },
     resetProjectColWidths() { this.projectColWidths = [3, 1.2, 1.3, 1.6, 1] as number[] },
     resetTerminalWidths() { this.terminalWidths = {} },
-    setTerminalWidth(key: string, ratio: number) { this.terminalWidths[key] = ratio },
-    setTerminalDark(v: boolean) { this.terminalDark = v },
     setLastTab(projectId: number, tab: string) {
       this.lastTabByProject[projectId] = tab
     },
@@ -39,13 +39,11 @@ export const useUIStore = defineStore('ui', {
       this.pendingRerunProjectId = projectId
       this.pendingRerunTestIds = testIds
     },
-clearPendingRerun() {
-      this.pendingRerunProjectId = null;
-      this.pendingRerunTestIds = [];
+    clearPendingRerun() {
+      this.pendingRerunProjectId = null
+      this.pendingRerunTestIds = []
     },
-
-    resetProjectColWidths() { this.projectColWidths = [3, 1.2, 1.3, 1.6, 1] as number[] },
-    resetTerminalWidths() { this.terminalWidths = {} },
+  },
   persist: {
     omit: ['pendingRerunProjectId', 'pendingRerunTestIds']
   }

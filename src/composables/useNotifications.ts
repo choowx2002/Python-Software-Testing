@@ -24,7 +24,7 @@ export async function requestNotificationPermission(): Promise<boolean> {
   }
 }
 
-export async function notify(title: string, body: string, _options?: { onClick?: () => void }) {
+export async function notify(title: string, body: string) {
   // 检查用户是否启用了通知
   const uiStore = useUIStore()
   if (!uiStore.notificationsEnabled) return

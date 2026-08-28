@@ -1967,6 +1967,8 @@ function onFocusSearch() {
       v-if="testCaseMenu"
       :items="testCaseMenuItems"
       :open="!!testCaseMenu"
+      :x="testCaseMenu.x"
+      :y="testCaseMenu.y"
       @close="testCaseMenu = null"
     />
 
@@ -1975,6 +1977,8 @@ function onFocusSearch() {
       v-if="resultMenu"
       :items="resultMenuItems"
       :open="!!resultMenu"
+      :x="resultMenu.x"
+      :y="resultMenu.y"
       @close="resultMenu = null"
     />
 

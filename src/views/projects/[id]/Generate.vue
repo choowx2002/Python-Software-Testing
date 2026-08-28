@@ -16,8 +16,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  Circle,
-  CircleDot,
   Copy,
   Eye,
   Folder,
@@ -111,6 +109,14 @@ const projectId = computed(() => Number(route.params.id));
 
 type GenerationStatus = "idle" | "running" | "completed" | "failed";
 type Algorithm = "MOSA" | "DYNAMOSA" | "WSPA" | "RANDOM";
+
+/** 每种策略的标识色（与帮助文案中的 🔵🟢🟡🔴 对应） */
+const algoAccent: Record<Algorithm, string> = {
+  MOSA: "bg-sky-500",
+  DYNAMOSA: "bg-emerald-500",
+  WSPA: "bg-amber-500",
+  RANDOM: "bg-rose-500",
+};
 
 interface SourceFile {
   name: string;
@@ -1032,7 +1038,7 @@ function onFocusSearch() {
     </div>
 
     <!-- ══════════ 主卡：源文件（左） + 设置（右） ══════════ -->
-    <section class="card overflow-hidden">
+    <section class="card">
       <div class="grid min-h-0 grid-cols-1 lg:grid-cols-[1fr_360px]">
         <!-- 左：源文件树 -->
         <div class="min-h-0 border-b border-border lg:border-b-0 lg:border-r">
@@ -1171,20 +1177,34 @@ function onFocusSearch() {
                   :key="alg"
                   type="button"
                   :disabled="isGenerating"
-                  class="flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition disabled:cursor-not-allowed"
+                  class="flex flex-col gap-1 rounded-lg border px-3 py-2 text-left transition disabled:cursor-not-allowed"
                   :class="
                     algorithm === alg
-                      ? 'border-brand-200 bg-brand-50 text-brand-700'
-                      : 'border-border text-zinc-700 hover:bg-zinc-50'
+                      ? 'border-brand-200 bg-brand-50'
+                      : 'border-border hover:bg-zinc-50'
                   "
                   @click="algorithm = alg"
                 >
-                  <CircleDot v-if="algorithm === alg" class="h-3.5 w-3.5 text-brand-600" />
-                  <Circle v-else class="h-3.5 w-3.5 text-zinc-300" />
-                  <span class="font-medium">{{ alg }}</span>
+                  <span class="flex items-center gap-1.5">
+                    <span class="h-2 w-2 shrink-0 rounded-full" :class="algoAccent[alg]" />
+                    <span
+                      class="text-xs font-medium"
+                      :class="algorithm === alg ? 'text-brand-700' : 'text-zinc-700'"
+                    >
+                      {{ alg }}
+                    </span>
+                  </span>
+                  <span
+                    class="text-[10px] leading-4"
+                    :class="algorithm === alg ? 'text-brand-600/70' : 'text-zinc-400'"
+                  >
+                    {{ t(`generate.algoDesc.${alg}`) }}
+                  </span>
                 </button>
               </div>
-              <p class="mt-1.5 text-[11px] text-zinc-400">{{ t("generate.algorithmHint") }}</p>
+              <p class="mt-1.5 text-[11px] leading-4 text-zinc-400">
+                {{ t("generate.algorithmHint") }}
+              </p>
             </div>
 
             <!-- 生成检查 -->
@@ -1524,6 +1544,8 @@ function onFocusSearch() {
       v-if="sourceMenu"
       :items="sourceMenuItems"
       :open="!!sourceMenu"
+      :x="sourceMenu.x"
+      :y="sourceMenu.y"
       @close="sourceMenu = null"
     />
 
@@ -1532,6 +1554,8 @@ function onFocusSearch() {
       v-if="resultMenu"
       :items="resultMenuItems"
       :open="!!resultMenu"
+      :x="resultMenu.x"
+      :y="resultMenu.y"
       @close="resultMenu = null"
     />
 

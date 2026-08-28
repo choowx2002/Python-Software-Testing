@@ -1,273 +1,292 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { useI18n } from "vue-i18n";
-import { Copy, Database, Download, Eraser, ExternalLink, FolderPlus, GitBranch, HelpCircle, Loader2, Moon, Palette, RefreshCw, RotateCcw, Save, Settings, Sun, Trash2, WandSparkles, AlertCircle, ArrowLeft, CheckCircle2, RotateCcw, Sun, Trash2, XCircle, Eye, EyeOff } from "@lucide/vue";
-import { useI18n } from "vue-i18n";
-import DatabaseSchemaViewer from "../../components/DatabaseSchemaViewer.vue";
-import AppButton from "../components/ui/AppButton.vue";
-import AppModal from "../components/ui/AppModal.vue";
-import AppConfirmModal from "../components/ui/AppConfirmModal.vue";
-import AppTooltip from "../components/ui/AppTooltip.vue";
+import {
+  AlertCircle,
+  ArrowLeft,
+  CheckCircle2,
+  RefreshCw,
+  RotateCcw,
+  Settings,
+  Trash2,
+  WandSparkles,
+} from "@lucide/vue";
 import AppButton from "../components/ui/AppButton.vue";
 import AppCard from "../components/ui/AppCard.vue";
-import StatusPill from "../components/ui/StatusPill.vue";
-import { useUIStore } from "../../stores/uiStore";
+import AppConfirmModal from "../components/ui/AppConfirmModal.vue";
+import AppTooltip from "../components/ui/AppTooltip.vue";
+import DatabaseSchemaViewer from "../components/DatabaseSchemaViewer.vue";
+import { useUIStore } from "../stores/uiStore";
+import { setLocale } from "../i18n";
 
 const router = useRouter();
 const uiStore = useUIStore();
-const { t } = useI18n();
+const { t, locale } = useI18n();
 
+// ---------- 通用：语言 ----------
+const currentLocale = computed(() => locale.value);
+
+function switchLocale(lang: "en" | "zh") {
+  setLocale(lang);
+}
+
+// ---------- 通用：终端主题（与 TerminalPanel 共用 uiStore.terminalDark） ----------
+const terminalTheme = computed({
+  get: () => (uiStore.terminalDark ? "dark" : "light"),
+  set: (v: "light" | "dark") => uiStore.setTerminalDark(v === "dark"),
+});
+
+// ---------- 布局：重置 ----------
+const resetMessage = ref("");
+
+function flashResetMessage() {
+  resetMessage.value = t("settings.resetSuccess");
+  window.setTimeout(() => (resetMessage.value = ""), 2000);
+}
+
+function resetProjectColWidths() {
+  uiStore.resetProjectColWidths();
+  flashResetMessage();
+}
+
+function resetTerminalWidth() {
+  uiStore.resetTerminalWidths();
+  flashResetMessage();
+}
+
+// ---------- 危险区：清空全部历史 ----------
 const showClearConfirm = ref(false);
 const isClearing = ref(false);
 const clearMessage = ref("");
+const clearFailed = ref(false);
 
 async function clearAllHistory() {
-  if (!confirm(t("settings.danger.confirmClear"))) return;
   isClearing.value = true;
   clearMessage.value = "";
+  clearFailed.value = false;
   try {
     await invoke("clear_all_history");
     clearMessage.value = t("settings.danger.cleared");
-    setTimeout(() => { clearMessage.value = ""; }, 3000);
   } catch (error) {
+    clearFailed.value = true;
     clearMessage.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    isClearing.value = false;
+    showClearConfirm.value = false;
+    if (clearMessage.value) {
+      window.setTimeout(() => (clearMessage.value = ""), 3000);
+    }
   }
 }
 
-function resetColWidths() {
-  uiStore.resetProjectColWidths();
-  uiStore.resetTerminalWidths();
-}
+// ---------- 关于 ----------
+const version = ref("0.1.0");
+const stackItems = computed(() => (t("about.stack") as unknown as string[]) ?? []);
 
-const version = "1.2.0";
-
-const currentLocale = ref(localStorage.getItem("testmate-locale") || "en");
-const switchLocale = (lang: "en" | "zh") => {
-  localStorage.setItem("testmate-locale", lang);
-  window.location.reload();
-};
-
-const notificationsEnabled = ref(localStorage.getItem("notifications-enabled") !== "false");
-const setNotificationsEnabled = (enabled: boolean) => {
-  localStorage.setItem("notifications-enabled", String(enabled));
-};
-
-const terminalTheme = computed(() => localStorage.getItem("terminal-theme") || "light");
-const setTerminalTheme = (theme: "light" | "dark") => {
-  localStorage.setItem("terminal-theme", theme);
-  document.documentElement.classList.toggle("dark", theme === "dark");
-};
-
-function resetColWidths() {
-  uiStore.resetProjectColWidths();
-  uiStore.resetTerminalWidths();
-}
-
-const version = "1.2.0";
-
-const currentLocale = ref(localStorage.getItem("testmate-locale") || "en");
-const switchLocale = (lang: "en" | "zh") => {
-  localStorage.setItem("testmate-locale", lang);
-  window.location.reload();
-};
-
-const notificationsEnabled = ref(localStorage.getItem("notifications-enabled") !== "false");
-const setNotificationsEnabled = (enabled: boolean) => {
-  localStorage.setItem("notifications-enabled", String(enabled));
-};
-
-const terminalTheme = computed(() => localStorage.getItem("terminal-theme") || "light");
-const setTerminalTheme = (theme: "light" | "dark") => {
-  localStorage.setItem("terminal-theme", theme);
-  document.documentElement.classList.toggle("dark", theme === "dark");
-};
-
-function resetColWidths() {
-  uiStore.resetProjectColWidths();
-  uiStore.resetTerminalWidths();
-}
-
-const version = "1.2.0";
+onMounted(async () => {
+  try {
+    version.value = await getVersion();
+  } catch {
+    // 拿不到版本号时保留回退值
+  }
+});
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col gap-4 p-5">
+  <div class="flex h-screen w-screen flex-col bg-slate-50">
     <!-- Header -->
-    <header class="flex items-center justify-between gap-4 border-b border-border bg-white px-5 py-4">
-      <h1 class="text-lg font-semibold text-zinc-900">{{ t("settings.title") }}</h1>
-      <AppButton variant="ghost" @click="router.back()">
-        <ArrowLeft class="h-4 w-4" />
-        {{ t("common.back") }}
-      </AppButton>
-    </header>
+    <div class="flex h-14 shrink-0 items-center justify-between border-b border-zinc-200/80 bg-white px-6">
+      <div class="flex items-center gap-3">
+        <AppTooltip :content="t('common.back')" position="top">
+          <button
+            type="button"
+            @click="router.back()"
+            class="rounded-md p-1.5 transition-colors hover:bg-slate-100"
+            aria-label="Back"
+          >
+            <ArrowLeft class="h-4 w-4 text-slate-600" />
+          </button>
+        </AppTooltip>
+        <div class="h-5 w-px bg-zinc-200/80"></div>
+        <Settings class="h-4 w-4 text-brand-500" />
+        <h2 class="text-sm font-semibold text-slate-800">{{ t("settings.title") }}</h2>
+      </div>
+    </div>
 
-    <div class="flex-1 overflow-y-auto space-y-6">
-      <!-- General -->
-      <section class="space-y-4">
-        <h2 class="text-sm font-semibold text-zinc-900 uppercase tracking-wider mb-4">{{ t("settings.general") }}</section>
-
-        <div class="space-y-4">
-          <!-- Language -->
-          <div>
-            <label class="block text-xs font-medium text-zinc-700 mb-2">{{ t("settings.language") }}</label>
-            <div class="flex items-center gap-2">
-              <button
-                v-for="lang in (['en', 'zh'] as const)"
-                :key="lang"
-                @click="switchLocale(lang)"
-                :class="[
-                  'px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
-                  currentLocale === lang
-                    ? 'bg-brand-500 text-white'
-                    : 'text-zinc-500 hover:bg-zinc-100'
-                ]"
-              >
-                {{ lang === "en" ? "EN" : "中文" }}
-              </button>
-            </div>
-          </div>
-
-          <!-- Notifications -->
-          <div>
-            <label class="flex items-center gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                :checked="notificationsEnabled"
-                @change="setNotificationsEnabled($event.target.checked)"
-                class="h-4 w-4 rounded border-zinc-300 text-brand-500 focus:ring-2 focus:ring-brand-500"
-              />
-              <div>
-                <p class="text-sm font-medium text-zinc-900">{{ t("settings.notifications") }}</p>
-                <p class="text-xs text-zinc-500">{{ t("settings.notificationsHint") }}</p>
+    <!-- Content -->
+    <div class="flex-1 overflow-y-auto">
+      <div class="mx-auto max-w-3xl space-y-5 p-6">
+        <!-- 通用 -->
+        <section class="rounded-md border border-zinc-200/80 bg-white p-5">
+          <h3 class="mb-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+            {{ t("settings.general") }}
+          </h3>
+          <div class="space-y-5">
+            <!-- 语言 -->
+            <div>
+              <label class="mb-2 block text-sm font-medium text-zinc-900">{{ t("settings.language") }}</label>
+              <div class="flex items-center gap-2">
+                <button
+                  v-for="lang in (['en', 'zh'] as const)"
+                  :key="lang"
+                  type="button"
+                  @click="switchLocale(lang)"
+                  :class="[
+                    'rounded-md border px-3 py-1.5 text-xs font-medium transition-colors',
+                    currentLocale === lang
+                      ? 'border-brand-500 bg-brand-500 text-white'
+                      : 'border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50',
+                  ]"
+                >
+                  {{ lang === "en" ? "EN" : "中文" }}
+                </button>
               </div>
-            </label>
-          </div>
+            </div>
 
-          <!-- Terminal Theme -->
-          <div>
-            <label class="block text-xs font-medium text-zinc-700 mb-2">{{ t("settings.terminalTheme") }}</label>
-            <div class="flex items-center gap-2">
-              <button
-                @click="setTerminalTheme('light')"
-                :class="[
-                  'px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
-                  terminalTheme.value === 'light'
-                    ? 'bg-brand-500 text-white'
-                    : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-                ]"
-              >
-                {{ t("settings.terminal.light") }}
-              </button>
-              <button
-                @click="setTerminalTheme('dark')"
-                :class="[
-                  'px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
-                  terminalTheme.value === 'dark'
-                    ? 'bg-brand-500 text-white'
-                    : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-                ]"
-              >
-                {{ t("settings.terminal.dark") }}
-              </button>
+            <!-- 系统通知 -->
+            <div>
+              <label class="flex cursor-pointer select-none items-start gap-3">
+                <input
+                  type="checkbox"
+                  v-model="uiStore.notificationsEnabled"
+                  class="mt-0.5 h-4 w-4 rounded border-zinc-300 text-brand-500 focus:ring-2 focus:ring-brand-500"
+                />
+                <span>
+                  <span class="block text-sm font-medium text-zinc-900">{{ t("settings.notifications") }}</span>
+                  <span class="mt-0.5 block text-xs text-zinc-500">{{ t("settings.notificationsHint") }}</span>
+                </span>
+              </label>
+            </div>
+
+            <!-- 终端主题 -->
+            <div>
+              <label class="mb-2 block text-sm font-medium text-zinc-900">{{ t("settings.terminalTheme") }}</label>
+              <div class="flex items-center gap-2">
+                <button
+                  type="button"
+                  @click="terminalTheme = 'light'"
+                  :class="[
+                    'rounded-md border px-3 py-1.5 text-xs font-medium transition-colors',
+                    terminalTheme === 'light'
+                      ? 'border-brand-500 bg-brand-500 text-white'
+                      : 'border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50',
+                  ]"
+                >
+                  {{ t("settings.terminalLight") }}
+                </button>
+                <button
+                  type="button"
+                  @click="terminalTheme = 'dark'"
+                  :class="[
+                    'rounded-md border px-3 py-1.5 text-xs font-medium transition-colors',
+                    terminalTheme === 'dark'
+                      ? 'border-brand-500 bg-brand-500 text-white'
+                      : 'border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50',
+                  ]"
+                >
+                  {{ t("settings.terminalDark") }}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </section>
 
-        <div class="space-y-4">
-          <!-- Layout -->
-          <h2 class="text-sm font-semibold text-zinc-900 uppercase tracking-wider mb-4">{{ t("settings.layout") }}</section>
-
-          <div class="space-y-4">
-            <AppButton variant="secondary" @click="resetColWidths" :disabled="isClearing">
-              <RefreshCw class="h-4 w-4" />
+        <!-- 布局 -->
+        <section class="rounded-md border border-zinc-200/80 bg-white p-5">
+          <h3 class="mb-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+            {{ t("settings.layout") }}
+          </h3>
+          <div class="flex flex-wrap items-center gap-3">
+            <AppButton variant="secondary" size="sm" @click="resetProjectColWidths">
+              <RefreshCw class="h-3.5 w-3.5" />
               {{ t("settings.resetColWidths") }}
             </AppButton>
-
-            <AppButton variant="secondary" @click="resetColWidths" :disabled="isClearing">
-              <RotateCcw class="h-4 w-4" />
+            <AppButton variant="secondary" size="sm" @click="resetTerminalWidth">
+              <RotateCcw class="h-3.5 w-3.5" />
               {{ t("settings.resetTerminalWidth") }}
             </AppButton>
+            <span v-if="resetMessage" class="text-xs text-emerald-600">{{ resetMessage }}</span>
           </div>
-        </div>
+        </section>
 
-        <!-- Data & Debug -->
-        <section class="space-y-4">
-          <h2 class="text-sm font-semibold text-zinc-900 uppercase tracking-wider mb-4">{{ t("settings.data") }}</section>
-
+        <!-- 数据与调试 -->
+        <section>
+          <h3 class="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+            {{ t("settings.data") }}
+          </h3>
           <AppCard :title="t('settings.dbSchema')" :subtitle="t('settings.dbSchemaDesc')">
             <DatabaseSchemaViewer />
           </AppCard>
         </section>
 
-        <!-- Danger Zone -->
-        <section class="space-y-4">
-          <h2 class="text-sm font-semibold text-zinc-900 uppercase tracking-wider mb-4">{{ t("settings.danger") }}</section>
-
-          <div v-if="showClearConfirm" class="rounded-lg border border-rose-200 bg-rose-50 p-4">
-            <p class="text-xs text-rose-700 mb-2">{{ t("settings.danger.confirmClear") }}</p>
-            <div class="mt-3 flex gap-2">
-              <AppButton variant="danger" size="sm" :loading="isClearing" @click="clearAllHistory">
-                <Trash2 class="h-3.5 w-3.5" />
-                {{ t("settings.danger.clearAll") }}
-              </AppButton>
-              <AppButton variant="ghost" size="sm" @click="showClearConfirm = false">
-                {{ t("common.cancel") }}
-              </AppButton>
-            </div>
-            <div v-else class="rounded-lg border border-rose-200 bg-rose-50 p-4">
-              <div class="flex items-start gap-3">
-                <AlertCircle class="h-4 w-4 shrink-0 text-rose-500" />
-                <div>
-                  <p class="text-xs font-medium text-rose-800">{{ t("settings.danger.title") }}</p>
-                  <p class="mt-1 text-[11px] text-rose-600">{{ t("settings.danger.description") }}</p>
-                </div>
-              </div>
-              <div class="mt-3 flex justify-end gap-2">
-                <AppButton variant="ghost" size="sm" @click="showClearConfirm = false">
-                  {{ t("common.cancel") }}
-                </AppButton>
-                <AppButton variant="danger" size="sm" :loading="isClearing" @click="clearAllHistory">
+        <!-- 危险区 -->
+        <section class="rounded-md border border-rose-200 bg-white p-5">
+          <div class="flex items-start gap-3">
+            <AlertCircle class="mt-0.5 h-4 w-4 shrink-0 text-rose-500" />
+            <div class="min-w-0 flex-1">
+              <h3 class="text-sm font-semibold text-rose-800">{{ t("settings.danger.title") }}</h3>
+              <p class="mt-1 text-xs text-rose-600">{{ t("settings.danger.description") }}</p>
+              <div class="mt-3 flex flex-wrap items-center gap-3">
+                <AppButton variant="dangerSolid" size="sm" @click="showClearConfirm = true">
                   <Trash2 class="h-3.5 w-3.5" />
                   {{ t("settings.danger.clearAll") }}
                 </AppButton>
+                <span
+                  v-if="clearMessage"
+                  class="text-xs"
+                  :class="clearFailed ? 'text-rose-600' : 'text-emerald-600'"
+                >
+                  {{ clearMessage }}
+                </span>
               </div>
             </div>
           </div>
         </section>
 
-        <!-- About -->
-        <section class="space-y-4 pt-4 border-t border-border">
-          <h2 class="text-sm font-semibold text-zinc-900 uppercase tracking-wider mb-4">{{ t("settings.about") }}</section>
-
-          <div class="space-y-4">
-            <div class="flex items-center gap-3">
-              <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-500">
-                <WandSparkles class="h-5 w-5 text-white" />
-              </div>
-              <div>
-                <p class="font-semibold text-zinc-900">{{ t("about.title") }}</p>
-                <p class="text-xs text-zinc-500">v{{ version }}</p>
-              </div>
+        <!-- 关于 -->
+        <section class="rounded-md border border-zinc-200/80 bg-white p-5">
+          <h3 class="mb-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+            {{ t("settings.about") }}
+          </h3>
+          <div class="flex items-center gap-3">
+            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-500">
+              <WandSparkles class="h-5 w-5 text-white" />
             </div>
-            <p class="text-xs text-zinc-500">{{ t("about.description") }}</p>
-            <div class="pt-2 border-t border-border">
-              <p class="text-xs font-medium text-zinc-700">{{ t("about.techStack") }}</p>
-              <ul class="mt-1 space-y-1 text-xs text-zinc-500">
-                <li v-for="item in t('about.stack', { count: 3 }).split('|')" :key="item">{{ item }}</li>
-              </ul>
+            <div>
+              <p class="text-sm font-semibold text-zinc-900">{{ t("about.title") }}</p>
+              <p class="text-xs text-zinc-500">v{{ version }}</p>
             </div>
+          </div>
+          <p class="mt-3 text-xs text-zinc-500">{{ t("about.description") }}</p>
+          <div class="mt-4 border-t border-zinc-100 pt-3">
+            <p class="text-xs font-medium text-zinc-700">{{ t("about.techStack") }}</p>
+            <ul class="mt-1.5 space-y-1.5">
+              <li
+                v-for="item in stackItems"
+                :key="item"
+                class="flex items-center gap-1.5 text-xs text-zinc-500"
+              >
+                <CheckCircle2 class="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                {{ item }}
+              </li>
+            </ul>
           </div>
         </section>
       </div>
     </div>
-</template>
 
-<style scoped>
-@media (prefers-reduced-motion: reduce) {
-  * {
-    transition: none !important;
-  }
-}
-</style>
+    <AppConfirmModal
+      :open="showClearConfirm"
+      :title="t('settings.danger.clearAll')"
+      :description="t('settings.danger.confirmClear')"
+      :confirm-label="t('settings.danger.clearAll')"
+      variant="danger"
+      :loading="isClearing"
+      @update:open="(v: boolean) => { if (!v) showClearConfirm = false }"
+      @confirm="clearAllHistory"
+    />
+  </div>
+</template>

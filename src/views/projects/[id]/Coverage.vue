@@ -1727,6 +1727,8 @@ function onFocusSearch() {
       v-if="fileMenu"
       :items="fileMenuItems"
       :open="!!fileMenu"
+      :x="fileMenu.x"
+      :y="fileMenu.y"
       @close="fileMenu = null"
     />
 

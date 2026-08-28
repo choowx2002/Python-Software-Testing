@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { nextTick, ref, watch } from 'vue'
 import { HelpCircle } from '@lucide/vue'
 // @ts-expect-error Teleport used only in template
 import { Teleport } from 'vue'
@@ -11,6 +11,36 @@ const props = defineProps<{
 }>()
 
 const open = ref(false)
+const triggerRef = ref<HTMLButtonElement>()
+const panelRef = ref<HTMLDivElement>()
+const panelStyle = ref<{ left: string; top: string } | undefined>(undefined)
+
+const GAP = 6
+const EDGE_MARGIN = 8
+
+function positionPanel() {
+  const trigger = triggerRef.value
+  const panel = panelRef.value
+  if (!trigger || !panel) return
+  const triggerRect = trigger.getBoundingClientRect()
+  const w = panel.offsetWidth
+  const h = panel.offsetHeight
+  let left = triggerRect.left
+  let top = triggerRect.bottom + GAP
+  // 下方放不下时翻转到按钮上方
+  if (top + h + EDGE_MARGIN > window.innerHeight) {
+    top = Math.max(EDGE_MARGIN, triggerRect.top - h - GAP)
+  }
+  // 靠右边缘时左移，避免溢出窗口
+  if (left + w + EDGE_MARGIN > window.innerWidth) {
+    left = Math.max(EDGE_MARGIN, window.innerWidth - w - EDGE_MARGIN)
+  }
+  panelStyle.value = { left: `${left}px`, top: `${top}px` }
+}
+
+watch(open, (o) => {
+  if (o) nextTick(positionPanel)
+})
 
 // Used in template
 const { title, content } = props
@@ -19,6 +49,7 @@ const { title, content } = props
 <template>
   <span class="relative inline-flex">
     <button
+      ref="triggerRef"
       type="button"
       class="rounded p-0.5 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
       @click="open = !open"
@@ -30,9 +61,9 @@ const { title, content } = props
     <Teleport to="body" v-if="open">
       <Transition name="popover">
         <div class="help-popover-overlay" @click.self="open = false">
-          <div class="help-popover-panel" @click.stop>
+          <div ref="panelRef" class="help-popover-panel" :style="panelStyle" @click.stop>
             <h4 class="text-sm font-semibold text-zinc-900">{{ title }}</h4>
-            <p class="mt-1 text-xs leading-5 text-zinc-600">{{ content }}</p>
+            <p class="mt-1 whitespace-pre-line text-xs leading-5 text-zinc-600">{{ content }}</p>
           </div>
         </div>
       </Transition>

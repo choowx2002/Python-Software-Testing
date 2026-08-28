@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 统一侧边栏外壳：品牌区（brand 插槽）+ 导航区（默认插槽）+ 可选底部插槽 + 版本/语言切换
+ * 统一侧边栏外壳：品牌区（brand 插槽）+ 导航区（默认插槽）+ 可选底部插槽
  * Dashboard 与项目 Layout 共用，保证两处视觉一致。
  * 用法：
  *   <AppSidebar>
@@ -8,18 +8,11 @@
  *     <template #footer>…</template>  ← 额外底部（如"返回"按钮）
  *   </AppSidebar>
  */
-import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import { setLocale } from "../i18n";
 import { useUIStore } from "../stores/uiStore";
 
-const { t, locale } = useI18n();
+const { t } = useI18n();
 const uiStore = useUIStore();
-const currentLocale = computed(() => locale.value);
-
-function switchLocale(lang: "en" | "zh") {
-  setLocale(lang);
-}
 </script>
 
 <template>

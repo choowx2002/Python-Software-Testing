@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 
 interface MenuItem {
   label?: string
@@ -13,11 +13,43 @@ interface MenuItem {
 const props = defineProps<{
   items: MenuItem[]
   open: boolean
+  /** 鼠标点击的视口坐标（clientX/clientY），用于定位菜单 */
+  x: number
+  y: number
   onClose: () => void
 }>()
 
 const menuRef = ref<HTMLDivElement>()
 const focusedIndex = ref(-1)
+const panelStyle = ref<{ left: string; top: string } | undefined>(undefined)
+
+const EDGE_MARGIN = 8
+
+function positionMenu() {
+  const el = menuRef.value
+  if (!el) return
+  const w = el.offsetWidth
+  const h = el.offsetHeight
+  let left = props.x
+  let top = props.y
+  // 靠近右边缘时左移，避免溢出窗口
+  if (left + w + EDGE_MARGIN > window.innerWidth) {
+    left = Math.max(EDGE_MARGIN, window.innerWidth - w - EDGE_MARGIN)
+  }
+  // 靠近底边缘时翻转到鼠标上方，避免溢出窗口
+  if (top + h + EDGE_MARGIN > window.innerHeight) {
+    top = Math.max(EDGE_MARGIN, props.y - h - EDGE_MARGIN)
+  }
+  panelStyle.value = { left: `${left}px`, top: `${top}px` }
+}
+
+watch(
+  () => [props.open, props.x, props.y],
+  () => {
+    if (props.open) nextTick(positionMenu)
+  },
+  { immediate: true }
+)
 
 const actionableItems = computed(() =>
   props.items.map((item, i) => ({ ...item, index: i })).filter(i => !i.divider)
@@ -67,6 +99,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
           ref="menuRef"
           class="contextmenu-panel"
           role="menu"
+          :style="panelStyle"
           @click.stop
         >
           <template v-for="(item, idx) in items" :key="idx">

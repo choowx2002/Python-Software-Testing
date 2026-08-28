@@ -704,6 +704,8 @@ const latestPassRate = computed(() => {
       v-if="timelineMenu"
       :items="timelineMenuItems"
       :open="!!timelineMenu"
+      :x="timelineMenu.x"
+      :y="timelineMenu.y"
       @close="timelineMenu = null"
     />
 

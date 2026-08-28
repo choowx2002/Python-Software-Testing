@@ -15,9 +15,13 @@ import { useI18n } from "vue-i18n";
 import { useProjectStore, type Project } from "../stores/projectStore";
 import { useUIStore } from "../stores/uiStore";
 import {
+  ArrowDown,
+  ArrowUp,
   BookOpen,
   Bug,
   Code2,
+  Copy,
+  Edit,
   ExternalLink,
   FolderPlus,
   GitBranch,
@@ -394,10 +398,10 @@ const coverageTone = (coverage: number) =>
         </AppTooltip>
       </div>
 
-      <p class="section-label mb-1.5 mt-5">Settings</p>
+      <p class="section-label mb-1.5 mt-5">{{ t("dashboard.settings") }}</p>
       <div class="space-y-0.5">
         <AppTooltip :content="t('dashboard.settings')" position="right">
-          <AppNavItem :icon="Settings" label="Settings" @click="router.push('/settings')" />
+          <AppNavItem :icon="Settings" :label="t('dashboard.settings')" @click="router.push('/settings')" />
         </AppTooltip>
       </div>
     </AppSidebar>
@@ -674,6 +678,8 @@ const coverageTone = (coverage: number) =>
       v-if="projectMenu"
       :items="projectMenuItems"
       :open="!!projectMenu"
+      :x="projectMenu.x"
+      :y="projectMenu.y"
       @close="projectMenu = null"
     />
 
