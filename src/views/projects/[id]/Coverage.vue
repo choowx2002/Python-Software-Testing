@@ -1191,557 +1191,430 @@ function onFocusSearch() {
   <div class="flex h-full min-h-0 gap-4 p-5">
     <!-- 左：主内容 -->
     <div class="flex min-w-0 flex-1 flex-col gap-4 overflow-auto">
-    <!-- 页头 -->
-    <header class="flex items-start justify-between gap-4">
-      <div class="min-w-0">
-        <div class="flex items-center gap-3">
-          <div
-            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-500"
-          >
-            <Gauge class="h-4 w-4" />
-          </div>
-          <div class="min-w-0">
-            <h1 class="text-lg font-semibold text-zinc-900">{{ t("coverage.title") }}</h1>
-            <p class="mt-0.5 truncate text-xs text-zinc-500">
-              {{
-                currentProject?.name
-                  ? t("coverage.subtitle", { name: currentProject.name })
-                  : t("coverage.subtitle", { name: t("layout.notLoaded") })
-              }}
-            </p>
+      <!-- 页头 -->
+      <header class="flex items-start justify-between gap-4">
+        <div class="min-w-0">
+          <div class="flex items-center gap-3">
+            <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-500">
+              <Gauge class="h-4 w-4" />
+            </div>
+            <div class="min-w-0">
+              <h1 class="text-lg font-semibold text-zinc-900">{{ t("coverage.title") }}</h1>
+              <p class="mt-0.5 truncate text-xs text-zinc-500">
+                {{
+                  currentProject?.name
+                    ? t("coverage.subtitle", { name: currentProject.name })
+                    : t("coverage.subtitle", { name: t("layout.notLoaded") })
+                }}
+              </p>
+            </div>
           </div>
         </div>
-      </div>
-      <StatusPill :status="statusPillStatus" :label="statusText" :pulse="isRunning" />
-    </header>
+        <StatusPill :status="statusPillStatus" :label="statusText" :pulse="isRunning" />
+      </header>
 
-    <!-- ══════════ 范围 + 运行 ══════════ -->
-    <section class="card">
-      <div class="px-5 py-4">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 class="text-sm font-semibold text-zinc-900">{{ t("coverage.scopeTitle") }}</h2>
-            <p class="mt-0.5 text-xs text-zinc-500">{{ t("coverage.scopeDesc") }}</p>
-          </div>
-          <AppButton
-            variant="secondary"
-            size="sm"
-            :loading="isLoadingSources || isLoadingTests"
-            :disabled="isRunning"
-            @click="refreshScans"
-          >
-            <RefreshCw class="h-3.5 w-3.5" />
-            {{ t("common.refresh") }}
-          </AppButton>
-        </div>
-
-        <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-          <!-- 源目录 -->
-          <div class="rounded-lg border border-border">
-            <div class="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
-              <span class="text-xs font-medium text-zinc-700">{{ t("coverage.targetSource") }}</span>
-              <span class="shrink-0 font-mono text-[10px] text-zinc-400">
-                {{ t("coverage.targetsSelected", { count: selectedSourceCount }) }}
-              </span>
+      <!-- ══════════ 范围 + 运行 ══════════ -->
+      <section class="card">
+        <div class="px-5 py-4">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 class="text-sm font-semibold text-zinc-900">{{ t("coverage.scopeTitle") }}</h2>
+              <p class="mt-0.5 text-xs text-zinc-500">{{ t("coverage.scopeDesc") }}</p>
             </div>
-
-            <div class="flex items-center gap-2 border-b border-border px-3 py-2">
-              <div class="relative min-w-0 flex-1">
-                <Search
-                  class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400"
-                />
-                <input
-                  v-model="sourceSearch"
-                  ref="sourceSearchInput"
-                  type="text"
-                  :placeholder="t('coverage.searchPlaceholder')"
-                  :disabled="isRunning"
-                  class="input h-8 pl-8 pr-3"
-                />
-              </div>
-              <AppButton
-                variant="ghost"
-                size="sm"
-                :disabled="isRunning || filteredSourceFiles.length === 0 || allVisibleSelected"
-                @click="selectAllVisible"
-              >
-                {{ t("common.selectAll") }}
-              </AppButton>
-              <AppButton
-                variant="ghost"
-                size="sm"
-                :disabled="isRunning || selectedSourceCount === 0"
-                @click="clearSourceSelection"
-              >
-                {{ t("common.clear") }}
-              </AppButton>
-            </div>
-
-            <div class="max-h-56 overflow-auto">
-              <div v-if="isLoadingSources" class="px-4 py-8 text-center text-sm text-zinc-500">
-                <Loader2 class="mx-auto mb-2 h-5 w-5 animate-spin" />
-                {{ t("coverage.scanningSources") }}
-              </div>
-              <div
-                v-else-if="scanError"
-                class="m-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700"
-              >
-                {{ scanError.message }}
-                <p v-if="scanError.hint" class="mt-1 text-[11px] text-rose-600">
-                  {{ scanError.hint }}
-                </p>
-              </div>
-              <div v-else-if="sourceTree.length === 0" class="px-4 py-8 text-center text-sm text-zinc-500">
-                {{ t("coverage.noSources") }}
-                <div class="mt-3 flex items-center justify-center gap-2">
-                  <AppButton variant="secondary" size="sm" :disabled="isRunning" @click="scanSourceFiles">
-                    <RefreshCw class="h-3.5 w-3.5" />
-                    {{ t("common.refresh") }}
-                  </AppButton>
-                </div>
-              </div>
-              <div v-else class="py-1">
-                <TreeItem
-                  v-for="node in sourceTree"
-                  :key="node.id"
-                  :node="node"
-                  :expanded-dirs="expandedDirs"
-                  :selected-files="selectedSourceFiles"
-                  :disabled="isRunning"
-                  @toggle-dir="toggleDir"
-                  @toggle-file="toggleFile"
-                />
-              </div>
-            </div>
-
-            <div
-              v-if="selectedSourceCount > 0"
-              class="border-t border-border px-3 py-2 text-[11px] text-zinc-400"
-            >
-              {{ t("coverage.derivedSourceHint") }}:
-              <span class="font-mono">{{
-                deriveSourceDirs()
-                  .map((d) => (d === "." ? t("coverage.rootDir") : d))
-                  .join(", ")
-              }}</span>
-            </div>
+            <AppButton variant="secondary" size="sm" :loading="isLoadingSources || isLoadingTests" :disabled="isRunning"
+              @click="refreshScans">
+              <RefreshCw class="h-3.5 w-3.5" />
+              {{ t("common.refresh") }}
+            </AppButton>
           </div>
 
-          <!-- 测试文件 -->
-          <div class="rounded-lg border border-border">
-            <div class="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
-              <span class="text-xs font-medium text-zinc-700">{{ t("coverage.testFiles") }}</span>
-              <span class="shrink-0 font-mono text-[10px] text-zinc-400">
-                {{ t("coverage.targetsSelected", { count: selectedTestCount }) }}
-              </span>
-            </div>
-
-            <div class="flex items-center gap-1 border-b border-border px-3 py-2">
-              <AppButton
-                variant="ghost"
-                size="sm"
-                :disabled="isRunning || testFiles.length === 0"
-                @click="selectAllTests"
-              >
-                {{ t("common.selectAll") }}
-              </AppButton>
-              <AppButton
-                variant="ghost"
-                size="sm"
-                :disabled="isRunning || selectedTestCount === 0"
-                @click="clearTestSelection"
-              >
-                {{ t("common.clear") }}
-              </AppButton>
-              <span class="ml-auto shrink-0 text-[10px] text-zinc-400">
-                {{ t("coverage.allTestsHint") }}
-              </span>
-            </div>
-
-            <div class="max-h-56 overflow-auto">
-              <div v-if="isLoadingTests" class="px-4 py-8 text-center text-sm text-zinc-500">
-                <Loader2 class="mx-auto mb-2 h-5 w-5 animate-spin" />
-                {{ t("coverage.scanningTests") }}
+          <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+            <!-- 源目录 -->
+            <div class="rounded-lg border border-border">
+              <div class="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+                <span class="text-xs font-medium text-zinc-700">{{ t("coverage.targetSource") }}</span>
+                <span class="shrink-0 font-mono text-[10px] text-zinc-400">
+                  {{ t("coverage.targetsSelected", { count: selectedSourceCount }) }}
+                </span>
               </div>
-              <div v-else-if="testFiles.length === 0" class="px-4 py-8 text-center text-sm text-zinc-500">
-                {{ t("coverage.noTestFiles") }}
-                <div class="mt-3 flex items-center justify-center gap-2">
-                  <AppButton variant="secondary" size="sm" :disabled="isRunning" @click="scanTestFiles">
-                    <RefreshCw class="h-3.5 w-3.5" />
-                    {{ t("common.refresh") }}
-                  </AppButton>
-                  <AppButton
-                    variant="primary"
-                    size="sm"
-                    @click="router.push({ name: 'ProjectGenerate', params: { id: projectId } })"
-                  >
-                    <WandSparkles class="h-3.5 w-3.5" />
-                    {{ t("coverage.goGenerate") }}
-                  </AppButton>
+
+              <div class="flex items-center gap-2 border-b border-border px-3 py-2">
+                <div class="relative min-w-0 flex-1">
+                  <Search
+                    class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
+                  <input v-model="sourceSearch" ref="sourceSearchInput" type="text"
+                    :placeholder="t('coverage.searchPlaceholder')" :disabled="isRunning" class="input h-8 pl-8 pr-3" />
+                </div>
+                <AppButton variant="ghost" size="sm"
+                  :disabled="isRunning || filteredSourceFiles.length === 0 || allVisibleSelected"
+                  @click="selectAllVisible">
+                  {{ t("common.selectAll") }}
+                </AppButton>
+                <AppButton variant="ghost" size="sm" :disabled="isRunning || selectedSourceCount === 0"
+                  @click="clearSourceSelection">
+                  {{ t("common.clear") }}
+                </AppButton>
+              </div>
+
+              <div class="max-h-56 overflow-auto">
+                <div v-if="isLoadingSources" class="px-4 py-8 text-center text-sm text-zinc-500">
+                  <Loader2 class="mx-auto mb-2 h-5 w-5 animate-spin" />
+                  {{ t("coverage.scanningSources") }}
+                </div>
+                <div v-else-if="scanError"
+                  class="m-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700">
+                  {{ scanError.message }}
+                  <p v-if="scanError.hint" class="mt-1 text-[11px] text-rose-600">
+                    {{ scanError.hint }}
+                  </p>
+                </div>
+                <div v-else-if="sourceTree.length === 0" class="px-4 py-8 text-center text-sm text-zinc-500">
+                  {{ t("coverage.noSources") }}
+                  <div class="mt-3 flex items-center justify-center gap-2">
+                    <AppButton variant="secondary" size="sm" :disabled="isRunning" @click="scanSourceFiles">
+                      <RefreshCw class="h-3.5 w-3.5" />
+                      {{ t("common.refresh") }}
+                    </AppButton>
+                  </div>
+                </div>
+                <div v-else class="py-1">
+                  <TreeItem v-for="node in sourceTree" :key="node.id" :node="node" :expanded-dirs="expandedDirs"
+                    :selected-files="selectedSourceFiles" :disabled="isRunning" @toggle-dir="toggleDir"
+                    @toggle-file="toggleFile" />
                 </div>
               </div>
-              <button
-                v-for="file in testFiles"
-                :key="file.relativePath"
-                type="button"
-                :disabled="isRunning"
-                class="flex w-full items-center gap-3 border-b border-border px-3 py-2 text-left transition last:border-b-0 hover:bg-zinc-50 disabled:cursor-not-allowed"
-                @click="toggleTestFile(file.relativePath)"
-              >
-                <span
-                  class="flex h-4 w-4 shrink-0 items-center justify-center rounded border transition"
-                  :class="
-                    selectedTestFiles.includes(file.relativePath)
+
+              <div v-if="selectedSourceCount > 0" class="border-t border-border px-3 py-2 text-[11px] text-zinc-400">
+                {{ t("coverage.derivedSourceHint") }}:
+                <span class="font-mono">{{
+                  deriveSourceDirs()
+                    .map((d) => (d === "." ? t("coverage.rootDir") : d))
+                    .join(", ")
+                  }}</span>
+              </div>
+            </div>
+
+            <!-- 测试文件 -->
+            <div class="rounded-lg border border-border">
+              <div class="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+                <span class="text-xs font-medium text-zinc-700">{{ t("coverage.testFiles") }}</span>
+                <span class="shrink-0 font-mono text-[10px] text-zinc-400">
+                  {{ t("coverage.targetsSelected", { count: selectedTestCount }) }}
+                </span>
+              </div>
+
+              <div class="flex items-center gap-1 border-b border-border px-3 py-2">
+                <AppButton variant="ghost" size="sm" :disabled="isRunning || testFiles.length === 0"
+                  @click="selectAllTests">
+                  {{ t("common.selectAll") }}
+                </AppButton>
+                <AppButton variant="ghost" size="sm" :disabled="isRunning || selectedTestCount === 0"
+                  @click="clearTestSelection">
+                  {{ t("common.clear") }}
+                </AppButton>
+                <span class="ml-auto shrink-0 text-[10px] text-zinc-400">
+                  {{ t("coverage.allTestsHint") }}
+                </span>
+              </div>
+
+              <div class="max-h-56 overflow-auto">
+                <div v-if="isLoadingTests" class="px-4 py-8 text-center text-sm text-zinc-500">
+                  <Loader2 class="mx-auto mb-2 h-5 w-5 animate-spin" />
+                  {{ t("coverage.scanningTests") }}
+                </div>
+                <div v-else-if="testFiles.length === 0" class="px-4 py-8 text-center text-sm text-zinc-500">
+                  {{ t("coverage.noTestFiles") }}
+                  <div class="mt-3 flex items-center justify-center gap-2">
+                    <AppButton variant="secondary" size="sm" :disabled="isRunning" @click="scanTestFiles">
+                      <RefreshCw class="h-3.5 w-3.5" />
+                      {{ t("common.refresh") }}
+                    </AppButton>
+                    <AppButton variant="primary" size="sm"
+                      @click="router.push({ name: 'ProjectGenerate', params: { id: projectId } })">
+                      <WandSparkles class="h-3.5 w-3.5" />
+                      {{ t("coverage.goGenerate") }}
+                    </AppButton>
+                  </div>
+                </div>
+                <button v-for="file in testFiles" :key="file.relativePath" type="button" :disabled="isRunning"
+                  class="flex w-full items-center gap-3 border-b border-border px-3 py-2 text-left transition last:border-b-0 hover:bg-zinc-50 disabled:cursor-not-allowed"
+                  @click="toggleTestFile(file.relativePath)">
+                  <span class="flex h-4 w-4 shrink-0 items-center justify-center rounded border transition" :class="selectedTestFiles.includes(file.relativePath)
                       ? 'border-brand-500 bg-brand-500 text-white'
                       : 'border-zinc-300 bg-white'
-                  "
-                >
-                  <Check v-if="selectedTestFiles.includes(file.relativePath)" class="h-3 w-3" />
-                </span>
-                <FileCode2 class="h-4 w-4 shrink-0 text-zinc-400" />
-                <span class="min-w-0 flex-1 truncate font-mono text-xs text-zinc-700">
-                  {{ file.relativePath }}
-                </span>
-              </button>
+                    ">
+                    <Check v-if="selectedTestFiles.includes(file.relativePath)" class="h-3 w-3" />
+                  </span>
+                  <FileCode2 class="h-4 w-4 shrink-0 text-zinc-400" />
+                  <span class="min-w-0 flex-1 truncate font-mono text-xs text-zinc-700">
+                    {{ file.relativePath }}
+                  </span>
+                </button>
+              </div>
             </div>
           </div>
-        </div>
 
-        <!-- 底部：coverage.py 状态 + 运行按钮 -->
-        <div class="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-          <div class="flex flex-wrap items-center gap-2">
-            <span
-              v-if="checkingCoverage"
-              class="inline-flex items-center gap-1.5 text-xs text-zinc-500"
-            >
-              <Loader2 class="h-3.5 w-3.5 animate-spin" />
-              {{ t("coverage.badge.checking") }}
-            </span>
-            <template v-else-if="coverageInstalled === true">
-              <span
-                class="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
-              >
-                <CheckCircle2 class="h-3 w-3" />
-                {{ t("coverage.badge.installed") }}
+          <!-- 底部：coverage.py 状态 + 运行按钮 -->
+          <div class="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+            <div class="flex flex-wrap items-center gap-2">
+              <span v-if="checkingCoverage" class="inline-flex items-center gap-1.5 text-xs text-zinc-500">
+                <Loader2 class="h-3.5 w-3.5 animate-spin" />
+                {{ t("coverage.badge.checking") }}
               </span>
-            </template>
-            <template v-else-if="coverageInstalled === false">
-              <span
-                class="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700"
-              >
-                <AlertCircle class="h-3 w-3" />
-                {{ t("coverage.badge.notInstalled") }}
-              </span>
-              <AppButton
-                variant="secondary"
-                size="sm"
-                :loading="installingCoverage"
-                @click="installCoverage"
-              >
-                {{ t("coverage.installCoverage") }}
-              </AppButton>
-            </template>
-            <span v-if="installMessage" class="text-[11px] text-zinc-400">{{ installMessage }}</span>
+              <template v-else-if="coverageInstalled === true">
+                <span
+                  class="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                  <CheckCircle2 class="h-3 w-3" />
+                  {{ t("coverage.badge.installed") }}
+                </span>
+              </template>
+              <template v-else-if="coverageInstalled === false">
+                <span
+                  class="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                  <AlertCircle class="h-3 w-3" />
+                  {{ t("coverage.badge.notInstalled") }}
+                </span>
+                <AppButton variant="secondary" size="sm" :loading="installingCoverage" @click="installCoverage">
+                  {{ t("coverage.installCoverage") }}
+                </AppButton>
+              </template>
+              <span v-if="installMessage" class="text-[11px] text-zinc-400">{{ installMessage }}</span>
+            </div>
+
+            <AppButton variant="primary" :disabled="!canRun" :loading="isRunning" @click="runCoverage">
+              <Play v-if="!isRunning" class="h-4 w-4" />
+              {{ isRunning ? t("coverage.running") : t("coverage.run") }}
+            </AppButton>
           </div>
-
-          <AppButton
-            variant="primary"
-            :disabled="!canRun"
-            :loading="isRunning"
-            @click="runCoverage"
-          >
-            <Play v-if="!isRunning" class="h-4 w-4" />
-            {{ isRunning ? t("coverage.running") : t("coverage.run") }}
-          </AppButton>
         </div>
+      </section>
+
+      <!-- 错误横幅 -->
+      <div v-if="errorMessage" class="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
+        {{ errorMessage.message }}
+        <p v-if="errorMessage.hint" class="mt-1 text-[11px] text-rose-600">
+          {{ errorMessage.hint }}
+        </p>
       </div>
-    </section>
 
-    <!-- 错误横幅 -->
-    <div
-      v-if="errorMessage"
-      class="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700"
-    >
-      {{ errorMessage.message }}
-      <p v-if="errorMessage.hint" class="mt-1 text-[11px] text-rose-600">
-        {{ errorMessage.hint }}
-      </p>
-    </div>
-
-    <!-- ══════════ 结果区 ══════════ -->
-    <section v-if="hasResult" class="card overflow-hidden">
-      <!-- 摘要条 -->
-      <div class="grid grid-cols-2 gap-3 border-b border-border p-4 md:grid-cols-4">
-        <div class="rounded-lg border p-3" :class="cardBorderClass(displayPercent)">
-          <div class="text-[10px] text-zinc-500">{{ t("coverage.summary.totalCoverage") }}</div>
-          <div class="mt-0.5 text-2xl font-semibold" :class="percentTextClass(displayPercent)">
-            {{ displayPercent.toFixed(1) }}%
+      <!-- ══════════ 结果区 ══════════ -->
+      <section v-if="hasResult" class="card">
+        <!-- 摘要条 -->
+        <div class="grid grid-cols-2 gap-3 border-b border-border p-4 md:grid-cols-4">
+          <div class="rounded-lg border p-3" :class="cardBorderClass(displayPercent)">
+            <div class="text-[10px] text-zinc-500">{{ t("coverage.summary.totalCoverage") }}</div>
+            <div class="mt-0.5 text-2xl font-semibold" :class="percentTextClass(displayPercent)">
+              {{ displayPercent.toFixed(1) }}%
+            </div>
           </div>
-        </div>
 
-        <div class="rounded-lg border border-border p-3">
-          <div class="text-[10px] text-zinc-500">{{ t("coverage.summary.statementCoverage") }}</div>
-          <div class="mt-0.5 text-sm font-semibold text-zinc-900">
-            {{
-              hasTargetFilter
-                ? t("coverage.summary.statements", {
+          <div class="rounded-lg border border-border p-3">
+            <div class="text-[10px] text-zinc-500">{{ t("coverage.summary.statementCoverage") }}</div>
+            <div class="mt-0.5 text-sm font-semibold text-zinc-900">
+              {{
+                hasTargetFilter
+                  ? t("coverage.summary.statements", {
                     covered: visibleStats.covered,
                     total: visibleStats.total,
                   })
-                : t("coverage.summary.statements", {
+                  : t("coverage.summary.statements", {
                     covered: summary!.coveredStatements,
                     total: summary!.totalStatements,
                   })
-            }}
-          </div>
-          <div class="mt-1.5 h-1 overflow-hidden rounded-full bg-zinc-100">
-            <div
-              class="h-full rounded-full"
-              :class="barBgClass(statementPercent)"
-              :style="{ width: `${statementPercent}%` }"
-            />
-          </div>
-        </div>
-
-        <div class="rounded-lg border border-border p-3">
-          <div class="flex items-center gap-1 text-[10px] text-zinc-500">
-            <span>{{ t("coverage.summary.branchCoverage") }}</span>
-            <AppHelpPopover :title="t('coverage.summary.branchCoverage')" :content="t('help.branchCoverage')" />
-          </div>
-          <template v-if="summary!.branchPercent !== null">
-            <div class="mt-0.5 text-sm font-semibold text-zinc-900">
-              {{ t("coverage.summary.branches", { covered: summary!.coveredBranches ?? 0, total: summary!.totalBranches ?? 0 }) }}
+              }}
             </div>
-            <div class="mt-0.5 text-xs text-zinc-500">{{ summary!.branchPercent.toFixed(1) }}%</div>
-          </template>
-          <div v-else class="mt-0.5 text-xs text-zinc-400">
-            {{ t("coverage.summary.branchNotEnabled") }}
+            <div class="mt-1.5 h-1 overflow-hidden rounded-full bg-zinc-100">
+              <div class="h-full rounded-full" :class="barBgClass(statementPercent)"
+                :style="{ width: `${statementPercent}%` }" />
+            </div>
+          </div>
+
+          <div class="rounded-lg border border-border p-3">
+            <div class="flex items-center gap-1 text-[10px] text-zinc-500">
+              <span>{{ t("coverage.summary.branchCoverage") }}</span>
+              <AppHelpPopover :title="t('coverage.summary.branchCoverage')" :content="t('help.branchCoverage')" />
+            </div>
+            <template v-if="summary!.branchPercent !== null">
+              <div class="mt-0.5 text-sm font-semibold text-zinc-900">
+                {{ t("coverage.summary.branches", {
+                  covered: summary!.coveredBranches ?? 0, total:
+                    summary!.totalBranches ?? 0 }) }}
+              </div>
+              <div class="mt-0.5 text-xs text-zinc-500">{{ summary!.branchPercent.toFixed(1) }}%</div>
+            </template>
+            <div v-else class="mt-0.5 text-xs text-zinc-400">
+              {{ t("coverage.summary.branchNotEnabled") }}
+            </div>
+          </div>
+
+          <div class="rounded-lg border border-border p-3">
+            <div class="text-[10px] text-zinc-500">{{ t("coverage.summary.filesCovered") }}</div>
+            <div class="mt-0.5 text-sm font-semibold text-zinc-900">
+              {{ fileStats.covered }} / {{ fileStats.total }}
+            </div>
+            <div class="mt-0.5 text-xs text-zinc-400">{{ t("coverage.summary.filesCoveredHint") }}</div>
           </div>
         </div>
 
-        <div class="rounded-lg border border-border p-3">
-          <div class="text-[10px] text-zinc-500">{{ t("coverage.summary.filesCovered") }}</div>
-          <div class="mt-0.5 text-sm font-semibold text-zinc-900">
-            {{ fileStats.covered }} / {{ fileStats.total }}
-          </div>
-          <div class="mt-0.5 text-xs text-zinc-400">{{ t("coverage.summary.filesCoveredHint") }}</div>
-        </div>
-      </div>
-
-      <!-- 文件列表 + 源码查看器 -->
-      <div class="grid min-h-0 grid-cols-1 xl:grid-cols-[1fr_1.2fr]">
-        <div class="min-h-0 border-b border-border xl:border-b-0 xl:border-r">
-          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2">
-            <div class="flex items-center gap-1">
-              <button
-                v-for="f in coverageFilters"
-                :key="f.id"
-                type="button"
-                class="rounded-md px-2 py-1 text-[11px] font-medium transition"
-                :class="
-                  filter === f.id
-                    ? 'bg-zinc-900 text-white'
-                    : 'text-zinc-500 hover:bg-zinc-100'
-                "
-                @click="filter = f.id"
-              >
-                {{ f.label }}
+        <!-- 文件列表 + 源码查看器 -->
+        <div class="grid min-h-0 grid-cols-1 xl:grid-cols-[1fr_1.2fr]">
+          <div class="min-h-0 border-b border-border xl:border-b-0 xl:border-r">
+            <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2">
+              <div class="flex items-center gap-1">
+                <button v-for="f in coverageFilters" :key="f.id" type="button"
+                  class="rounded-md px-2 py-1 text-[11px] font-medium transition" :class="filter === f.id
+                      ? 'bg-zinc-900 text-white'
+                      : 'text-zinc-500 hover:bg-zinc-100'
+                    " @click="filter = f.id">
+                  {{ f.label }}
+                </button>
+              </div>
+              <button type="button"
+                class="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-800"
+                @click="sortOrder = sortOrder === 'desc' ? 'asc' : 'desc'">
+                <ArrowUpDown class="h-3 w-3" />
+                {{ sortOrder === "desc" ? t("coverage.fileList.highestFirst") : t("coverage.fileList.lowestFirst") }}
               </button>
             </div>
-            <button
-              type="button"
-              class="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-800"
-              @click="sortOrder = sortOrder === 'desc' ? 'asc' : 'desc'"
-            >
-              <ArrowUpDown class="h-3 w-3" />
-              {{ sortOrder === "desc" ? t("coverage.fileList.highestFirst") : t("coverage.fileList.lowestFirst") }}
-            </button>
-          </div>
 
-          <div class="max-h-96 divide-y divide-border overflow-auto">
-            <div
-              v-if="displayFiles.length === 0"
-              class="px-4 py-10 text-center text-xs text-zinc-400"
-            >
-              {{ t("coverage.fileList.noResults") }}
+            <div class="max-h-96 divide-y divide-border overflow-auto">
+              <div v-if="displayFiles.length === 0" class="px-4 py-10 text-center text-xs text-zinc-400">
+                {{ t("coverage.fileList.noResults") }}
+              </div>
+              <button v-for="file in displayFiles" :key="file.path" type="button" :disabled="isRunning"
+                class="flex w-full items-center gap-3 px-4 py-2.5 text-left transition hover:bg-zinc-50 disabled:cursor-not-allowed"
+                @click="toggleDetail(file.path)" @contextmenu.prevent="showFileMenu(file, $event)"
+                @dblclick="openSourceFile(file)">
+                <FileCode2 class="h-4 w-4 shrink-0 text-zinc-400" />
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate font-mono text-xs text-zinc-700">{{ file.path }}</span>
+                </span>
+                <span class="w-20 shrink-0">
+                  <div class="h-1 overflow-hidden rounded-full bg-zinc-100">
+                    <div class="h-full rounded-full" :class="barBgClass(file.percentCovered)"
+                      :style="{ width: `${file.percentCovered}%` }" />
+                  </div>
+                </span>
+                <span class="w-12 shrink-0 text-right font-mono text-[11px]"
+                  :class="percentTextClass(file.percentCovered)">
+                  {{ file.percentCovered.toFixed(0) }}%
+                </span>
+                <ChevronDown v-if="expandedFile === file.path" class="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                <ChevronRight v-else class="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+              </button>
             </div>
-            <button
-              v-for="file in displayFiles"
-              :key="file.path"
-              type="button"
-              :disabled="isRunning"
-              class="flex w-full items-center gap-3 px-4 py-2.5 text-left transition hover:bg-zinc-50 disabled:cursor-not-allowed"
-              @click="toggleDetail(file.path)"
-              @contextmenu.prevent="showFileMenu(file, $event)"
-              @dblclick="openSourceFile(file)"
-            >
-              <FileCode2 class="h-4 w-4 shrink-0 text-zinc-400" />
-              <span class="min-w-0 flex-1">
-                <span class="block truncate font-mono text-xs text-zinc-700">{{ file.path }}</span>
-              </span>
-              <span class="w-20 shrink-0">
-                <div class="h-1 overflow-hidden rounded-full bg-zinc-100">
-                  <div
-                    class="h-full rounded-full"
-                    :class="barBgClass(file.percentCovered)"
-                    :style="{ width: `${file.percentCovered}%` }"
-                  />
-                </div>
-              </span>
-              <span class="w-12 shrink-0 text-right font-mono text-[11px]" :class="percentTextClass(file.percentCovered)">
-                {{ file.percentCovered.toFixed(0) }}%
-              </span>
-              <ChevronDown v-if="expandedFile === file.path" class="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-              <ChevronRight v-else class="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-            </button>
           </div>
-        </div>
 
-        <!-- 源码查看器 -->
-        <div class="min-h-64 overflow-auto xl:max-h-96">
-          <div
-            v-if="!expandedFile"
-            class="flex h-full min-h-64 flex-col items-center justify-center px-6 text-center"
-          >
-            <FileCode2 class="mb-2 h-8 w-8 text-zinc-200" />
-            <p class="text-xs text-zinc-400">{{ t("coverage.detail.title") }}</p>
-          </div>
-          <div
-            v-else-if="detailLoading"
-            class="flex h-full min-h-64 items-center justify-center text-xs text-zinc-400"
-          >
-            <Loader2 class="mr-2 h-4 w-4 animate-spin" />
-            {{ t("coverage.detail.loading") }}
-          </div>
-          <div
-            v-else-if="detailError"
-            class="m-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700"
-          >
-            {{ detailError }}
-          </div>
-          <div v-else-if="detail" class="py-2">
-            <div class="flex items-center justify-between gap-3 border-b border-border px-4 pb-2">
-              <span class="min-w-0 truncate font-mono text-[11px] text-zinc-500">
-                {{ detail.path }}
-              </span>
-              <span class="shrink-0 font-mono text-[11px] font-semibold" :class="percentTextClass(detail.percentCovered)">
-                {{ t("coverage.detail.percentCovered", { percent: detail.percentCovered.toFixed(1) }) }}
-              </span>
+          <!-- 源码查看器 -->
+          <div class="min-h-64 overflow-auto xl:max-h-96">
+            <div v-if="!expandedFile"
+              class="flex h-full min-h-64 flex-col items-center justify-center px-6 text-center">
+              <FileCode2 class="mb-2 h-8 w-8 text-zinc-200" />
+              <p class="text-xs text-zinc-400">{{ t("coverage.detail.title") }}</p>
             </div>
-
-            <div class="flex items-center gap-3 border-b border-border px-4 py-1.5 text-[10px] text-zinc-500">
-              <span class="flex items-center gap-1">
-                <span class="h-2 w-2 rounded-sm bg-emerald-500" />
-                {{ t("coverage.detail.legend.covered") }}
-              </span>
-              <span class="flex items-center gap-1">
-                <span class="h-2 w-2 rounded-sm bg-rose-500" />
-                {{ t("coverage.detail.legend.missing") }}
-              </span>
-              <span class="flex items-center gap-1">
-                <span class="h-2 w-2 rounded-sm bg-amber-500" />
-                {{ t("coverage.detail.legend.excluded") }}
-              </span>
+            <div v-else-if="detailLoading"
+              class="flex h-full min-h-64 items-center justify-center text-xs text-zinc-400">
+              <Loader2 class="mr-2 h-4 w-4 animate-spin" />
+              {{ t("coverage.detail.loading") }}
             </div>
-
-            <!-- FR013：函数级过滤 -->
-            <div
-              v-if="functionStats.length > 0"
-              class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-1.5"
-            >
-              <label class="text-[10px] font-medium text-zinc-500">
-                {{ t("coverage.detail.functionFilter") }}
-              </label>
-              <select
-                v-model="functionFilter"
-                class="max-w-56 rounded-md border border-border bg-white px-2 py-1 text-[11px] text-zinc-700 focus:outline-none focus:ring-1 focus:ring-sky-500"
-              >
-                <option value="__all__">{{ t("coverage.detail.allFunctions") }}</option>
-                <option v-for="fn in functionStats" :key="fn.name" :value="fn.name">
-                  {{ fn.name }}
-                  ({{ fn.covered + fn.missing > 0
-                    ? `${Math.round((fn.covered / (fn.covered + fn.missing)) * 100)}%`
-                    : "—" }})
-                </option>
-              </select>
-              <span v-if="activeFunction" class="text-[10px] text-zinc-400">
-                {{ t("coverage.detail.functionCoverage", {
-                  covered: activeFunction.covered,
-                  total: activeFunction.covered + activeFunction.missing,
-                }) }}
-              </span>
+            <div v-else-if="detailError"
+              class="m-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700">
+              {{ detailError }}
             </div>
+            <div v-else-if="detail" class="py-2">
+              <div class="flex items-center justify-between gap-3 border-b border-border px-4 pb-2">
+                <span class="min-w-0 truncate font-mono text-[11px] text-zinc-500">
+                  {{ detail.path }}
+                </span>
+                <span class="shrink-0 font-mono text-[11px] font-semibold"
+                  :class="percentTextClass(detail.percentCovered)">
+                  {{ t("coverage.detail.percentCovered", { percent: detail.percentCovered.toFixed(1) }) }}
+                </span>
+              </div>
 
-            <div
-              v-for="line in filteredDetailLines"
-              :key="line.lineNumber"
-              class="flex gap-3 px-4 py-0.5 font-mono text-[11px] leading-5"
-              :class="lineRowClass(line.status)"
-            >
-              <span class="w-10 shrink-0 select-none text-right text-zinc-400">
-                {{ line.lineNumber }}
-              </span>
-              <span class="min-w-0 flex-1 whitespace-pre-wrap" :class="lineTextClass(line.status)">
-                {{ line.source }}
-              </span>
+              <div class="flex items-center gap-3 border-b border-border px-4 py-1.5 text-[10px] text-zinc-500">
+                <span class="flex items-center gap-1">
+                  <span class="h-2 w-2 rounded-sm bg-emerald-500" />
+                  {{ t("coverage.detail.legend.covered") }}
+                </span>
+                <span class="flex items-center gap-1">
+                  <span class="h-2 w-2 rounded-sm bg-rose-500" />
+                  {{ t("coverage.detail.legend.missing") }}
+                </span>
+                <span class="flex items-center gap-1">
+                  <span class="h-2 w-2 rounded-sm bg-amber-500" />
+                  {{ t("coverage.detail.legend.excluded") }}
+                </span>
+              </div>
+
+              <!-- FR013：函数级过滤 -->
+              <div v-if="functionStats.length > 0"
+                class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-1.5">
+                <label class="text-[10px] font-medium text-zinc-500">
+                  {{ t("coverage.detail.functionFilter") }}
+                </label>
+                <select v-model="functionFilter"
+                  class="max-w-56 rounded-md border border-border bg-white px-2 py-1 text-[11px] text-zinc-700 focus:outline-none focus:ring-1 focus:ring-sky-500">
+                  <option value="__all__">{{ t("coverage.detail.allFunctions") }}</option>
+                  <option v-for="fn in functionStats" :key="fn.name" :value="fn.name">
+                    {{ fn.name }}
+                    ({{ fn.covered + fn.missing > 0
+                      ? `${Math.round((fn.covered / (fn.covered + fn.missing)) * 100)}%`
+                      : "—" }})
+                  </option>
+                </select>
+                <span v-if="activeFunction" class="text-[10px] text-zinc-400">
+                  {{ t("coverage.detail.functionCoverage", {
+                    covered: activeFunction.covered,
+                    total: activeFunction.covered + activeFunction.missing,
+                  }) }}
+                </span>
+              </div>
+
+              <div v-for="line in filteredDetailLines" :key="line.lineNumber"
+                class="flex gap-3 px-4 py-0.5 font-mono text-[11px] leading-5" :class="lineRowClass(line.status)">
+                <span class="w-10 shrink-0 select-none text-right text-zinc-400">
+                  {{ line.lineNumber }}
+                </span>
+                <span class="min-w-0 flex-1 whitespace-pre-wrap" :class="lineTextClass(line.status)">
+                  {{ line.source }}
+                </span>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      <!-- 底部：导出 + 日志 -->
-      <div class="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3">
-        <div class="flex flex-wrap items-center gap-2">
-          <AppButton
-            variant="secondary"
-            size="sm"
-            :loading="exporting === 'csv'"
-            :disabled="exporting !== null"
-            @click="exportReport('csv')"
-          >
-            <Download class="h-3.5 w-3.5" />
-            {{ t("coverage.export.csv") }}
-          </AppButton>
-          <AppButton
-            variant="secondary"
-            size="sm"
-            :loading="exporting === 'json'"
-            :disabled="exporting !== null"
-            @click="exportReport('json')"
-          >
-            <Download class="h-3.5 w-3.5" />
-            {{ t("coverage.export.json") }}
-          </AppButton>
-          <AppButton variant="ghost" size="sm" @click="openInFileManager">
-            <FolderOpen class="h-3.5 w-3.5" />
-            {{ t("coverage.openInFileManager") }}
-          </AppButton>
-          <span v-if="exportMessage" class="max-w-64 truncate text-[11px] text-zinc-400">
-            {{ exportMessage }}
-          </span>
+        <!-- 底部：导出 + 日志 -->
+        <div class="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <AppButton variant="secondary" size="sm" :loading="exporting === 'csv'" :disabled="exporting !== null"
+              @click="exportReport('csv')">
+              <Download class="h-3.5 w-3.5" />
+              {{ t("coverage.export.csv") }}
+            </AppButton>
+            <AppButton variant="secondary" size="sm" :loading="exporting === 'json'" :disabled="exporting !== null"
+              @click="exportReport('json')">
+              <Download class="h-3.5 w-3.5" />
+              {{ t("coverage.export.json") }}
+            </AppButton>
+            <AppButton variant="ghost" size="sm" @click="openInFileManager">
+              <FolderOpen class="h-3.5 w-3.5" />
+              {{ t("coverage.openInFileManager") }}
+            </AppButton>
+            <span v-if="exportMessage" class="max-w-64 truncate text-[11px] text-zinc-400">
+              {{ exportMessage }}
+            </span>
+          </div>
         </div>
-        </div>
-    </section>
+      </section>
     </div><!-- /左：主内容 -->
 
     <!-- 文件列表右键菜单 -->
-    <AppContextMenu
-      v-if="fileMenu"
-      :items="fileMenuItems"
-      :open="!!fileMenu"
-      :x="fileMenu.x"
-      :y="fileMenu.y"
-      @close="fileMenu = null"
-    />
+    <AppContextMenu v-if="fileMenu" :items="fileMenuItems" :open="!!fileMenu" :x="fileMenu.x" :y="fileMenu.y"
+      @close="fileMenu = null" />
 
     <!-- 终端右侧面板 -->
-    <TerminalPanel
-      ref="terminalRef"
-      :title="t('coverage.outputTitle')"
-      :lines="coverageOutput"
-      :active="isRunning"
-      width-key="coverage"
-      @clear="clearOutput"
-    />
+    <TerminalPanel ref="terminalRef" :title="t('coverage.outputTitle')" :lines="coverageOutput" :active="isRunning"
+      width-key="coverage" @clear="clearOutput" />
   </div>
 </template>
