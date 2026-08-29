@@ -219,12 +219,14 @@ fn parse_pytest_collection(
             None
         };
 
+        let line = find_test_line(&file_path, class_name.as_deref(), &test_name);
+
         cases.push(TestCase {
             id,
             name: test_name,
             file,
             class_name,
-            line: None,
+            line,
         });
     }
 
@@ -242,6 +244,49 @@ fn normalize_relative_path(
     Ok(relative
         .to_string_lossy()
         .replace('\\', "/"))
+}
+
+/// 在测试文件中定位 `def <test_name>` 的行号（1-based）。
+/// 有类名时先定位 `class <class_name>` 再从其后查找，降低同名方法误判。
+fn find_test_line(file_path: &Path, class_name: Option<&str>, test_name: &str) -> Option<u32> {
+    let content = std::fs::read_to_string(file_path).ok()?;
+    let lines: Vec<&str> = content.lines().collect();
+
+    // 起始搜索下标：有类名时从类定义之后开始
+    let mut start: usize = 0;
+    if let Some(class) = class_name {
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+            if let Some(rest) = trimmed.strip_prefix("class ") {
+                let name = rest
+                    .split(|c: char| c == '(' || c == ':' || c.is_whitespace())
+                    .next()
+                    .unwrap_or("");
+                if name == class {
+                    start = i + 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    for (i, line) in lines.iter().enumerate().skip(start) {
+        let trimmed = line.trim_start();
+        let def_rest = trimmed
+            .strip_prefix("async def ")
+            .or_else(|| trimmed.strip_prefix("def "));
+        if let Some(def_rest) = def_rest {
+            let name = def_rest
+                .split(|c: char| c == '(' || c.is_whitespace())
+                .next()
+                .unwrap_or("");
+            if name == test_name {
+                return Some((i + 1) as u32);
+            }
+        }
+    }
+
+    None
 }
 
 
@@ -270,6 +315,10 @@ pub struct TestResult {
     pub status: String,
     pub duration: f64,
     pub error_message: Option<String>,
+    /// JUnit `<testcase line="...">` 中的行号（pytest junitxml 提供；缺失时为 None）
+    pub line: Option<u32>,
+    /// `<skipped message="...">` 中的跳过原因（pytest 可能不提供，此时为 None）
+    pub skip_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -358,6 +407,11 @@ pub async fn run_tests_core(
     if !test_cases.is_empty() {
         args.extend(test_cases);
     }
+    // 默认 junit_family=xunit2 会过滤掉 <testcase> 的 file/line 属性，
+    // 导致结果列表无法定位文件与行号（打开/预览/复制路径失效）。
+    // xunit1 保留 file/line，解析器对两种 family 均兼容。
+    args.push("-o".to_string());
+    args.push("junit_family=xunit1".to_string());
     args.push(format!("--junitxml={}", junit_path.to_string_lossy()));
 
     let mut command_str = interpreter.display().to_string();
@@ -454,7 +508,11 @@ pub async fn run_tests_core(
 
     let passed = results.iter().filter(|r| r.status == "passed").count();
     let failed = results.iter().filter(|r| r.status == "failed" || r.status == "error").count();
-    let skipped = results.iter().filter(|r| r.status == "skipped").count();
+    // xfail 在 junit 中表现为 skipped 子类，汇总时并入 skipped，保持与 pytest 报告一致
+    let skipped = results
+        .iter()
+        .filter(|r| r.status == "skipped" || r.status == "xfailed")
+        .count();
 
     let _ = app_handle.emit(
         "test-finished",
@@ -569,7 +627,7 @@ pub fn parse_junit_results_from_str(content: &str) -> Result<Vec<TestResult>, St
                 if event.name().as_ref() == b"skipped" =>
             {
                 if let Some(test) = current.as_mut() {
-                    test.status = "skipped".to_string();
+                    apply_skipped_status(test, event);
                 }
             }
 
@@ -579,7 +637,7 @@ pub fn parse_junit_results_from_str(content: &str) -> Result<Vec<TestResult>, St
                 if event.name().as_ref() == b"skipped" =>
             {
                 if let Some(test) = current.as_mut() {
-                    test.status = "skipped".to_string();
+                    apply_skipped_status(test, event);
                 }
             }
 
@@ -644,6 +702,7 @@ fn parse_testcase_attributes(
     let mut name = String::new();
     let mut file = String::new();
     let mut duration = 0.0;
+    let mut line: Option<u32> = None;
 
     for attribute in event.attributes().flatten() {
         match attribute.key.as_ref() {
@@ -659,6 +718,11 @@ fn parse_testcase_attributes(
                 duration = String::from_utf8_lossy(&attribute.value)
                     .parse()
                     .unwrap_or(0.0);
+            }
+            b"line" => {
+                line = String::from_utf8_lossy(&attribute.value)
+                    .parse()
+                    .ok();
             }
             _ => {}
         }
@@ -677,5 +741,110 @@ fn parse_testcase_attributes(
         status: "passed".to_string(),
         duration,
         error_message: None,
+        line,
+        skip_reason: None,
+    }
+}
+
+/// 读取 XML 元素的某个属性值（找不到返回 None）。
+fn attr_value(event: &quick_xml::events::BytesStart, key: &[u8]) -> Option<String> {
+    event
+        .attributes()
+        .flatten()
+        .find(|a| a.key.as_ref() == key)
+        .map(|a| String::from_utf8_lossy(&a.value).to_string())
+}
+
+/// 处理 `<skipped>` 元素：pytest 的 xfail 会以 `<skipped type="pytest.xfail">` 形式出现，
+/// 需要单独标记为 "xfailed" 状态（区别于普通 skipped），原因取自 message 属性。
+fn apply_skipped_status(test: &mut TestResult, event: &quick_xml::events::BytesStart) {
+    let is_xfail = attr_value(event, b"type")
+        .map(|t| t.contains("xfail"))
+        .unwrap_or(false);
+    test.status = if is_xfail {
+        "xfailed".to_string()
+    } else {
+        "skipped".to_string()
+    };
+    test.skip_reason = attr_value(event, b"message")
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_junit_results_from_str;
+
+    #[test]
+    fn junit_parses_passed_self_closing_with_line() {
+        let xml = r#"<?xml version="1.0"?>
+<testsuite>
+  <testcase classname="test_user" name="test_add_0" file="tests/generated/test_user.py" line="3" time="0.001"/>
+</testsuite>"#;
+        let results = parse_junit_results_from_str(xml).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, "passed");
+        assert_eq!(results[0].line, Some(3));
+        assert_eq!(results[0].skip_reason, None);
+    }
+
+    #[test]
+    fn junit_parses_failed_with_error_message() {
+        let xml = r#"<?xml version="1.0"?>
+<testsuite>
+  <testcase classname="test_user" name="test_add_0" file="tests/generated/test_user.py" line="7" time="0.002">
+    <failure message="AssertionError">assert 1 == 2</failure>
+  </testcase>
+</testsuite>"#;
+        let results = parse_junit_results_from_str(xml).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, "failed");
+        assert!(results[0].error_message.as_deref().unwrap().contains("assert 1 == 2"));
+        assert_eq!(results[0].line, Some(7));
+    }
+
+    #[test]
+    fn junit_parses_skipped_with_reason_and_line() {
+        let xml = r#"<?xml version="1.0"?>
+<testsuite>
+  <testcase classname="test_user" name="test_requires_db" file="tests/generated/test_user.py" line="12" time="0.0">
+    <skipped message="requires a running MySQL instance"/>
+  </testcase>
+</testsuite>"#;
+        let results = parse_junit_results_from_str(xml).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, "skipped");
+        assert_eq!(results[0].skip_reason.as_deref(), Some("requires a running MySQL instance"));
+        assert_eq!(results[0].line, Some(12));
+    }
+
+    #[test]
+    fn junit_parses_skipped_self_closing_without_reason() {
+        let xml = r#"<?xml version="1.0"?>
+<testsuite>
+  <testcase classname="test_user" name="test_skipped_no_reason" file="tests/generated/test_user.py" time="0.0">
+    <skipped/>
+  </testcase>
+</testsuite>"#;
+        let results = parse_junit_results_from_str(xml).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, "skipped");
+        assert_eq!(results[0].skip_reason, None);
+        assert_eq!(results[0].line, None);
+    }
+
+    #[test]
+    fn junit_marks_xfail_as_distinct_status() {
+        let xml = r#"<?xml version="1.0"?>
+<testsuite>
+  <testcase classname="test_calculator" name="test_known_bug" file="tests/test_calculator.py" line="21" time="0.01">
+    <skipped type="pytest.xfail" message="known issue #123"/>
+  </testcase>
+</testsuite>"#;
+        let results = parse_junit_results_from_str(xml).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, "xfailed");
+        assert_eq!(results[0].skip_reason.as_deref(), Some("known issue #123"));
+        assert_eq!(results[0].line, Some(21));
     }
 }

@@ -39,6 +39,24 @@ const terminalTheme = computed({
   set: (v: "light" | "dark") => uiStore.setTerminalDark(v === "dark"),
 });
 
+// ---------- 通用：编辑器（打开测试/源码文件用的软件） ----------
+const EDITOR_PRESETS: { value: string; labelKey: string }[] = [
+  { value: "", labelKey: "settings.editorPresetDefault" },
+  { value: "code -g {path}:{line}", labelKey: "settings.editorPresetVSCode" },
+  { value: "pycharm --line {line} {path}", labelKey: "settings.editorPresetPyCharm" },
+  { value: "subl {path}:{line}", labelKey: "settings.editorPresetSublime" },
+];
+
+const editorSelection = computed({
+  get: () =>
+    EDITOR_PRESETS.some((p) => p.value === uiStore.editorCommand)
+      ? uiStore.editorCommand
+      : "custom",
+  set: (v: string) => {
+    if (v !== "custom") uiStore.setEditorCommand(v);
+  },
+});
+
 // ---------- 布局：重置 ----------
 const resetMessage = ref("");
 
@@ -190,6 +208,28 @@ onMounted(async () => {
                   {{ t("settings.terminalDark") }}
                 </button>
               </div>
+            </div>
+
+            <!-- 编辑器：用哪个软件打开测试/源码文件 -->
+            <div>
+              <label class="mb-2 block text-sm font-medium text-zinc-900">{{ t("settings.editor") }}</label>
+              <select
+                v-model="editorSelection"
+                class="h-9 w-full rounded-lg border border-zinc-200 bg-white px-3 text-[13px] text-zinc-800 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/15"
+              >
+                <option v-for="p in EDITOR_PRESETS" :key="p.value" :value="p.value">
+                  {{ t(p.labelKey) }}
+                </option>
+                <option value="custom">{{ t("settings.editorCustom") }}</option>
+              </select>
+              <input
+                v-if="editorSelection === 'custom'"
+                v-model="uiStore.editorCommand"
+                type="text"
+                :placeholder="t('settings.editorPlaceholder')"
+                class="mt-2 h-9 w-full rounded-lg border border-zinc-200 bg-white px-3 font-mono text-[13px] text-zinc-800 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/15"
+              />
+              <p class="mt-1.5 text-xs text-zinc-500">{{ t("settings.editorHint") }}</p>
             </div>
           </div>
         </section>

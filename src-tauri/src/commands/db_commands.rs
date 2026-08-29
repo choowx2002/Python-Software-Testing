@@ -218,6 +218,15 @@ pub async fn list_execution_result_details(
     crate::db::list_execution_result_details(&app, execution_id).await
 }
 
+/// 查询一次执行记录所属项目的路径（独立详情窗口定位测试文件用）
+#[tauri::command]
+pub async fn get_execution_project_path(
+    app: tauri::AppHandle,
+    execution_id: i64,
+) -> Result<Option<String>, String> {
+    crate::db::get_execution_project_path(&app, execution_id).await
+}
+
 /// 批量保存一次生成的所有测试文件明细
 #[tauri::command]
 pub async fn save_generation_file_details(

@@ -2,8 +2,11 @@
 import { ref, computed, watch, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "vue-i18n";
-import { AlertCircle, CheckCircle2, Clock3, FileCode2, Loader2, RotateCcw, XCircle } from "@lucide/vue";
+import { AlertCircle, CheckCircle2, Clock3, Copy, Eye, FileCode2, FolderOpen, Loader2, RotateCcw, XCircle } from "@lucide/vue";
 import AppTooltip from "./ui/AppTooltip.vue";
+import AppContextMenu from "./ui/AppContextMenu.vue";
+import AppModal from "./ui/AppModal.vue";
+import { useUIStore } from "../stores/uiStore";
 
 type DetailType = "execute" | "coverage" | "generation";
 
@@ -15,8 +18,10 @@ const props = withDefaults(
     allowRerun?: boolean;
     /** 覆盖率对比的上一次记录 id（传入则渲染本次 vs 上次对比） */
     compareId?: number | null;
+    /** 项目根路径（用于定位/打开测试文件；独立详情窗口会自行获取） */
+    projectPath?: string;
   }>(),
-  { allowRerun: true, compareId: null },
+  { allowRerun: true, compareId: null, projectPath: "" },
 );
 
 const emit = defineEmits<{
@@ -33,6 +38,8 @@ interface ExecutionDetailRow {
   status: string;
   duration: number;
   errorMessage: string | null;
+  line: number | null;
+  skipReason: string | null;
 }
 
 interface FileCoverageRow {
@@ -127,6 +134,107 @@ const failedIds = computed<string[]>(() =>
     .map((r) => (r.file ? `${r.file}::${r.name}` : r.name)),
 );
 
+/* ---- 打开 / 预览 / 复制路径 / 文件管理器（与 Execute 交互一致） ---- */
+const uiStore = useUIStore();
+
+function absTestPath(file: string): string {
+  const projectPath = props.projectPath;
+  if (!projectPath) return file;
+  return file.startsWith("/") || /^[A-Za-z]:/.test(file)
+    ? file
+    : `${projectPath}/${file}`;
+}
+
+async function openTestFile(file: string | null, line: number | null) {
+  if (!file) return;
+  const full = absTestPath(file);
+  try {
+    await invoke("open_file", {
+      path: full,
+      editor: uiStore.editorCommand,
+      line: line ?? undefined,
+    });
+  } catch (error) {
+    console.error("[History] open_file failed:", error);
+  }
+}
+
+function copyPathWithLine(file: string | null, line: number | null) {
+  if (!file) return;
+  const abs = absTestPath(file);
+  void navigator.clipboard.writeText(line ? `${abs}:${line}` : abs).catch(() => {});
+}
+
+async function revealInFileManager(file: string | null) {
+  if (!file) return;
+  try {
+    await invoke("reveal_in_folder", { path: absTestPath(file) });
+  } catch (error) {
+    console.error("[History] reveal_in_folder failed:", error);
+  }
+}
+
+/* ---- 应用内预览 ---- */
+const preview = ref<{ file: string; line: number | null } | null>(null);
+const previewContent = ref("");
+const previewLoading = ref(false);
+const previewError = ref("");
+const previewLines = computed(() => previewContent.value.split("\n"));
+
+async function openPreview(file: string | null, line: number | null) {
+  if (!file) return;
+  const full = absTestPath(file);
+  preview.value = { file: full, line };
+  previewContent.value = "";
+  previewError.value = "";
+  previewLoading.value = true;
+  try {
+    previewContent.value = await invoke<string>("read_text_file", { path: full });
+  } catch (error) {
+    previewError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    previewLoading.value = false;
+  }
+}
+
+/* ---- 行右键菜单 ---- */
+const rowMenu = ref<{ row: ExecutionDetailRow; x: number; y: number } | null>(null);
+
+function showRowMenu(row: ExecutionDetailRow, e: MouseEvent) {
+  rowMenu.value = { row, x: e.clientX, y: e.clientY };
+}
+
+const rowMenuItems = computed(() => {
+  if (!rowMenu.value) return [];
+  const row = rowMenu.value.row;
+  return [
+    {
+      label: t("contextmenu.openFile"),
+      icon: FileCode2,
+      disabled: !row.file,
+      action: () => openTestFile(row.file, row.line),
+    },
+    {
+      label: t("contextmenu.preview"),
+      icon: Eye,
+      disabled: !row.file,
+      action: () => openPreview(row.file, row.line),
+    },
+    {
+      label: t("contextmenu.copyPath"),
+      icon: Copy,
+      disabled: !row.file,
+      action: () => copyPathWithLine(row.file, row.line),
+    },
+    {
+      label: t("contextmenu.openInFolder"),
+      icon: FolderOpen,
+      disabled: !row.file,
+      action: () => revealInFileManager(row.file),
+    },
+  ];
+});
+
 interface CoverageCompareRow {
   path: string;
   current: number;
@@ -169,6 +277,8 @@ function statusColor(status: string): string {
       return "text-rose-600";
     case "skipped":
       return "text-amber-600";
+    case "xfailed":
+      return "text-violet-600";
     default:
       return "text-zinc-500";
   }
@@ -178,6 +288,7 @@ function statusIcon(status: string) {
   if (status === "passed") return CheckCircle2;
   if (status === "failed" || status === "error") return XCircle;
   if (status === "skipped") return Clock3;
+  if (status === "xfailed") return AlertCircle;
   return AlertCircle;
 }
 
@@ -191,6 +302,8 @@ function statusLabel(status: string): string {
       return t("execute.results.error");
     case "skipped":
       return t("execute.results.skipped");
+    case "xfailed":
+      return t("execute.results.xfailed");
     default:
       return status;
   }
@@ -285,6 +398,7 @@ function coverageTone(percent: number): string {
         v-for="row in executionRows"
         :key="row.id"
         class="px-3.5 py-2.5"
+        @contextmenu.prevent="showRowMenu(row, $event)"
       >
         <div class="flex items-start gap-2.5">
           <component
@@ -321,6 +435,17 @@ function coverageTone(percent: number): string {
                 class="mt-1 rounded-md bg-zinc-50 px-3 py-2"
               >
                 <p class="text-[11px] leading-5 text-zinc-600">{{ statusExplain(row.status) }}</p>
+                <div
+                  v-if="row.status === 'skipped' || row.status === 'xfailed'"
+                  class="mt-1.5 space-y-1"
+                >
+                  <div class="text-[11px] leading-5 text-zinc-600">
+                    {{ row.skipReason || t("execute.results.noSkipReason") }}
+                  </div>
+                  <div v-if="row.line" class="font-mono text-[10px] text-zinc-400">
+                    {{ row.file }}:{{ row.line }}
+                  </div>
+                </div>
                 <pre
                   v-if="row.errorMessage"
                   class="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-zinc-950 px-3 py-2 font-mono text-[10px] leading-4 text-rose-300"
@@ -463,4 +588,49 @@ function coverageTone(percent: number): string {
       </div>
     </div>
   </div>
+
+  <!-- 测试文件应用内预览 -->
+  <AppModal
+    :open="!!preview"
+    :title="preview?.file ?? ''"
+    @update:open="(open: boolean) => { if (!open) preview = null }"
+  >
+    <div v-if="previewLoading" class="flex items-center justify-center gap-2 py-10 text-sm text-zinc-400">
+      <Loader2 class="h-4 w-4 animate-spin" />
+      {{ t("common.loading") }}
+    </div>
+    <div
+      v-else-if="previewError"
+      class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700"
+    >
+      {{ previewError }}
+    </div>
+    <div v-else class="max-h-[60vh] overflow-auto rounded-lg border border-border bg-zinc-50">
+      <div
+        v-for="(lineText, i) in previewLines"
+        :key="i"
+        class="flex"
+        :class="[preview?.line === i + 1 ? 'bg-amber-100' : '', i % 2 === 1 ? 'bg-zinc-50/50' : '']"
+      >
+        <span
+          class="w-10 shrink-0 select-none border-r border-zinc-200 px-2 py-0.5 text-right font-mono text-[10px] text-zinc-400"
+        >
+          {{ i + 1 }}
+        </span>
+        <span class="min-w-0 flex-1 whitespace-pre px-3 py-0.5 font-mono text-[11px] leading-5 text-zinc-700">
+          {{ lineText }}
+        </span>
+      </div>
+    </div>
+  </AppModal>
+
+  <!-- 结果行右键菜单 -->
+  <AppContextMenu
+    v-if="rowMenu"
+    :items="rowMenuItems"
+    :open="!!rowMenu"
+    :x="rowMenu.x"
+    :y="rowMenu.y"
+    @close="rowMenu = null"
+  />
 </template>

@@ -120,6 +120,7 @@ pub fn run() {
             commands::db_commands::list_coverage_history,
             commands::db_commands::save_execution_result_details,
             commands::db_commands::list_execution_result_details,
+            commands::db_commands::get_execution_project_path,
             commands::db_commands::save_generation_file_details,
             commands::db_commands::list_generation_file_details,
             commands::db_commands::get_coverage_history_files,

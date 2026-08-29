@@ -74,7 +74,13 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKeydown));
           <!-- 标题栏 -->
           <header class="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
             <div class="min-w-0">
-              <h3 id="app-modal-title" class="text-sm font-semibold text-zinc-900">{{ title }}</h3>
+              <h3
+                id="app-modal-title"
+                class="truncate text-sm font-semibold text-zinc-900"
+                :title="title"
+              >
+                {{ title }}
+              </h3>
               <p v-if="description" class="mt-1 text-xs text-zinc-500">{{ description }}</p>
             </div>
             <button

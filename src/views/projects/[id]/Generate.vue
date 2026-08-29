@@ -32,6 +32,7 @@ import {
   XCircle,
 } from "@lucide/vue";
 import { useProjectStore } from "../../../stores/projectStore";
+import { useUIStore } from "../../../stores/uiStore";
 import TreeItem from "../../../components/TreeItem.vue";
 import { interpretError, type InterpretedError } from "../../../utils/errors";
 import { useI18n } from "vue-i18n";
@@ -52,6 +53,7 @@ import { notifyGenerationComplete } from "../../../composables/useNotifications"
 const route = useRoute();
 const router = useRouter();
 const projectStore = useProjectStore();
+const uiStore = useUIStore();
 const { t } = useI18n();
 
 const { setProgress: setTaskProgress, clear: clearTaskProgress } = useTaskbarProgress();
@@ -814,7 +816,7 @@ function resetGenerationState() {
 
 async function openFile(path: string) {
   try {
-    await invoke("open_file", { path });
+    await invoke("open_file", { path, editor: uiStore.editorCommand });
   } catch (error) {
     console.error("[Generate] Failed to open file:", error);
   }

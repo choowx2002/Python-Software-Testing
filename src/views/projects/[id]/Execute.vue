@@ -19,9 +19,12 @@ import {
   ChevronRight,
   Clock3,
   Copy,
+  Eye,
   FileCode2,
+  FolderOpen,
   Gauge,
   ListChecks,
+  Loader2,
   Play,
   RefreshCw,
   RotateCcw,
@@ -79,6 +82,11 @@ const testCaseMenuItems = computed(() => {
       },
     },
     { divider: true },
+    { label: t("contextmenu.openFile"), icon: FileCode2, disabled: !test.file, action: () => openTestFile(test.file, test.line) },
+    { label: t("contextmenu.preview"), icon: Eye, disabled: !test.file, action: () => openPreview(test.file, test.line) },
+    { label: t("contextmenu.copyPath"), icon: Copy, disabled: !test.file, action: () => copyPathWithLine(test.file, test.line) },
+    { label: t("contextmenu.openInFolder"), icon: FolderOpen, disabled: !test.file, action: () => revealInFileManager(test.file) },
+    { divider: true },
     { label: t("contextmenu.copyTestId"), icon: Copy, action: () => copyText(test.id) },
   ];
 });
@@ -93,6 +101,11 @@ const resultMenuItems = computed(() => {
   const r = resultMenu.value.result;
   const isFailed = r.status === "failed" || r.status === "error";
   return [
+    { label: t("contextmenu.openFile"), icon: FileCode2, disabled: !r.file, action: () => openTestFile(r.file, r.line) },
+    { label: t("contextmenu.preview"), icon: Eye, disabled: !r.file, action: () => openPreview(r.file, r.line) },
+    { label: t("contextmenu.copyPath"), icon: Copy, disabled: !r.file, action: () => copyPathWithLine(r.file, r.line) },
+    { label: t("contextmenu.openInFolder"), icon: FolderOpen, disabled: !r.file, action: () => revealInFileManager(r.file) },
+    { divider: true },
     {
       label: t("contextmenu.copyError"),
       icon: Copy,
@@ -126,7 +139,7 @@ const projectId = computed(() => Number(route.params.id));
 
 type ExecutionStatus = "idle" | "running" | "completed" | "failed";
 type TestScope = "all" | "file" | "selected" | "suite";
-type ResultFilter = "all" | "passed" | "failed" | "skipped";
+type ResultFilter = "all" | "passed" | "failed" | "skipped" | "xfailed";
 
 interface TestFile {
   name: string;
@@ -153,9 +166,11 @@ interface TestResult {
   id: string;
   name: string;
   file: string;
-  status: "passed" | "failed" | "skipped" | "error";
+  status: "passed" | "failed" | "skipped" | "error" | "xfailed";
   duration: number;
   errorMessage: string | null;
+  line: number | null;
+  skipReason: string | null;
 }
 
 interface TestStartedEvent {
@@ -430,10 +445,21 @@ const filteredResults = computed(() => {
     );
   }
 
+  if (resultFilter.value === "skipped") {
+    // skipped 筛选包含普通跳过与预期失败（xfail 属于 skipped 子类，汇总计数一致）
+    return testResults.value.filter(
+      (result) => result.status === "skipped" || result.status === "xfailed",
+    );
+  }
+
   return testResults.value.filter(
     (result) => result.status === resultFilter.value,
   );
 });
+
+const xfailedTests = computed(() =>
+  testResults.value.filter((result) => result.status === "xfailed").length,
+);
 
 const failedResults = computed(() => {
   return testResults.value.filter(
@@ -542,6 +568,10 @@ const resultFilters = computed(() => [
   {
     id: "skipped" as ResultFilter,
     label: t("execute.results.filterSkipped", { count: skippedTests.value }),
+  },
+  {
+    id: "xfailed" as ResultFilter,
+    label: t("execute.results.filterXfailed", { count: xfailedTests.value }),
   },
 ]);
 
@@ -1109,6 +1139,8 @@ async function saveExecutionToDb(payload: TestFinishedEvent) {
           status: r.status,
           duration: r.duration,
           errorMessage: r.errorMessage,
+          line: r.line,
+          skipReason: r.skipReason,
         })),
       });
     }
@@ -1138,6 +1170,68 @@ function isFailureExpanded(resultId: string) {
   return expandedFailures.value.has(resultId);
 }
 
+/** 展开区容器样式（按状态区分颜色） */
+function resultDetailBoxClass(status: TestResult["status"]) {
+  switch (status) {
+    case "skipped":
+      return "border-amber-200 bg-amber-50";
+    case "xfailed":
+      return "border-violet-200 bg-violet-50";
+    default:
+      return "border-rose-200 bg-rose-50";
+  }
+}
+
+/** 展开区文字样式 */
+function resultDetailTextClass(status: TestResult["status"]) {
+  switch (status) {
+    case "skipped":
+      return "text-amber-800";
+    case "xfailed":
+      return "text-violet-800";
+    default:
+      return "text-rose-800";
+  }
+}
+
+/** 展开区标题 */
+function resultDetailTitle(status: TestResult["status"]) {
+  switch (status) {
+    case "skipped":
+      return t("execute.results.skipDetails");
+    case "xfailed":
+      return t("execute.results.xfailDetails");
+    default:
+      return t("execute.results.failureDetails");
+  }
+}
+
+/** 该结果是否有可展开的详情（failed/error 的错误信息，或 skipped/xfailed 的详情） */
+function hasResultDetail(result: TestResult): boolean {
+  if (result.status === "failed" || result.status === "error") {
+    return !!result.errorMessage;
+  }
+  if (result.status === "skipped" || result.status === "xfailed") {
+    return true; // 即使无原因也展开，展示「未提供原因」与文件:行号
+  }
+  return false;
+}
+
+/** 展开区展示的主文本：failed/error → 错误信息；skipped → 跳过原因；xfailed → 固定解释（+原因） */
+function getResultDetail(result: TestResult): string | null {
+  if (result.status === "failed" || result.status === "error") {
+    return result.errorMessage;
+  }
+  if (result.status === "skipped") {
+    return result.skipReason;
+  }
+  if (result.status === "xfailed") {
+    const fixed = t("execute.results.xfailExplanation");
+    return result.skipReason ? `${fixed}\n${result.skipReason}` : fixed;
+  }
+  return null;
+}
+
 function getResultClass(status: TestResult["status"]) {
   switch (status) {
     case "passed":
@@ -1149,6 +1243,9 @@ function getResultClass(status: TestResult["status"]) {
 
     case "skipped":
       return "border-amber-200 bg-amber-50 text-amber-700";
+
+    case "xfailed":
+      return "border-violet-200 bg-violet-50 text-violet-700";
 
     default:
       return "border-zinc-200 bg-zinc-50 text-zinc-600";
@@ -1165,6 +1262,8 @@ function getResultLabel(status: TestResult["status"]) {
       return t("execute.results.error");
     case "skipped":
       return t("execute.results.skipped");
+    case "xfailed":
+      return t("execute.results.xfailed");
     default:
       return status;
   }
@@ -1181,6 +1280,9 @@ function getResultIcon(status: TestResult["status"]) {
 
     case "skipped":
       return Clock3;
+
+    case "xfailed":
+      return AlertCircle;
 
     default:
       return AlertCircle;
@@ -1199,32 +1301,74 @@ function rerunFailedTests() {
   void runTests();
 }
 
-async function copyError(message: string | null) {
-  if (!message) {
-    return;
-  }
-
-  try {
-    await navigator.clipboard.writeText(message);
-  } catch (error) {
-    console.error("[Execute] Failed to copy error:", error);
-  }
-}
-
 function clearOutput() {
   pytestOutput.value = [];
 }
 
-async function openResultFile(result: TestResult) {
+/** 把结果里的相对路径解析为绝对路径 */
+function absTestPath(file: string): string {
   const projectPath = currentProject.value?.path;
-  if (!projectPath || !result.file) return;
-  const full = result.file.startsWith("/") || /^[A-Za-z]:/.test(result.file)
-    ? result.file
-    : `${projectPath}/${result.file}`;
+  if (!projectPath) return file;
+  return file.startsWith("/") || /^[A-Za-z]:/.test(file)
+    ? file
+    : `${projectPath}/${file}`;
+}
+
+/** 用系统编辑器打开文件（带行号；编辑器遵循设置里的 editorCommand） */
+async function openTestFile(file: string, line: number | null) {
+  if (!file) return;
+  const full = absTestPath(file);
   try {
-    await invoke("open_file", { path: full });
+    await invoke("open_file", {
+      path: full,
+      editor: uiStore.editorCommand,
+      line: line ?? undefined,
+    });
   } catch (error) {
     console.error("[Execute] open_file failed:", error);
+  }
+}
+
+function openResultFile(result: TestResult) {
+  void openTestFile(result.file, result.line);
+}
+
+/** 复制绝对路径（带行号：/abs/path/test.py:12；无行号只复制路径） */
+function copyPathWithLine(file: string, line: number | null) {
+  const abs = absTestPath(file);
+  void copyText(line ? `${abs}:${line}` : abs);
+}
+
+/** 在文件管理器中定位文件 */
+async function revealInFileManager(file: string) {
+  if (!file) return;
+  try {
+    await invoke("reveal_in_folder", { path: absTestPath(file) });
+  } catch (error) {
+    console.error("[Execute] reveal_in_folder failed:", error);
+  }
+}
+
+/** 应用内预览：读取测试文件并在弹窗中显示，目标行高亮 */
+const preview = ref<{ file: string; line: number | null } | null>(null);
+const previewContent = ref("");
+const previewLoading = ref(false);
+const previewError = ref("");
+const previewLines = computed(() => previewContent.value.split("\n"));
+
+async function openPreview(file: string, line: number | null) {
+  if (!file) return;
+  const full = absTestPath(file);
+  preview.value = { file: full, line };
+  previewContent.value = "";
+  previewError.value = "";
+  previewLoading.value = true;
+  try {
+    previewContent.value = await invoke<string>("read_text_file", { path: full });
+  } catch (error) {
+    previewError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    previewLoading.value = false;
   }
 }
 
@@ -1809,7 +1953,9 @@ function onFocusSearch() {
                         ? 'text-emerald-500'
                         : result.status === 'skipped'
                           ? 'text-amber-500'
-                          : 'text-rose-500'
+                          : result.status === 'xfailed'
+                            ? 'text-violet-500'
+                            : 'text-rose-500'
                     "
                   />
                   <div class="min-w-0 flex-1">
@@ -1830,10 +1976,7 @@ function onFocusSearch() {
                     {{ result.duration.toFixed(2) }}s
                   </span>
                   <button
-                    v-if="
-                      result.errorMessage &&
-                      (result.status === 'failed' || result.status === 'error')
-                    "
+                    v-if="hasResultDetail(result)"
                     type="button"
                     class="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
                     @click="toggleFailure(result.id)"
@@ -1844,29 +1987,35 @@ function onFocusSearch() {
                 </div>
 
                 <div
-                  v-if="
-                    result.errorMessage &&
-                    (result.status === 'failed' || result.status === 'error') &&
-                    isFailureExpanded(result.id)
-                  "
-                  class="mt-2 rounded-lg border border-rose-200 bg-rose-50 p-3"
+                  v-if="hasResultDetail(result) && isFailureExpanded(result.id)"
+                  class="mt-2 rounded-lg border p-3"
+                  :class="resultDetailBoxClass(result.status)"
                 >
                   <div class="flex items-center justify-between gap-3">
-                    <span class="text-xs font-medium text-rose-800">
-                      {{ t("execute.results.failureDetails") }}
+                    <span class="text-xs font-medium" :class="resultDetailTextClass(result.status)">
+                      {{ resultDetailTitle(result.status) }}
                     </span>
                     <button
                       type="button"
-                      class="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-medium text-rose-700 transition hover:bg-rose-100"
-                      @click="copyError(result.errorMessage)"
+                      class="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-medium transition hover:bg-black/5"
+                      :class="resultDetailTextClass(result.status)"
+                      @click="copyText(getResultDetail(result) ?? '')"
                     >
                       <Copy class="h-3 w-3" />
                       {{ t("common.copy") }}
                     </button>
                   </div>
+                  <div
+                    v-if="(result.status === 'skipped' || result.status === 'xfailed') && result.line"
+                    class="mt-1 font-mono text-[10px]"
+                    :class="resultDetailTextClass(result.status)"
+                  >
+                    {{ result.file }}:{{ result.line }}
+                  </div>
                   <pre
-                    class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-5 text-rose-800"
-                    >{{ result.errorMessage }}</pre
+                    class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-5"
+                    :class="resultDetailTextClass(result.status)"
+                    >{{ getResultDetail(result) || t("execute.results.noSkipReason") }}</pre
                   >
                 </div>
               </div>
@@ -1961,6 +2110,41 @@ function onFocusSearch() {
       @confirm="confirmDeleteSuite"
       @update:open="(open: boolean) => { if (!open) deleteSuiteTarget = null }"
     />
+
+    <!-- 测试文件应用内预览 -->
+    <AppModal
+      :open="!!preview"
+      :title="preview?.file ?? ''"
+      @update:open="(open: boolean) => { if (!open) preview = null }"
+    >
+      <div v-if="previewLoading" class="flex items-center justify-center gap-2 py-10 text-sm text-zinc-400">
+        <Loader2 class="h-4 w-4 animate-spin" />
+        {{ t("common.loading") }}
+      </div>
+      <div
+        v-else-if="previewError"
+        class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700"
+      >
+        {{ previewError }}
+      </div>
+      <div v-else class="max-h-[60vh] overflow-auto rounded-lg border border-border bg-zinc-50">
+        <div
+          v-for="(lineText, i) in previewLines"
+          :key="i"
+          class="flex"
+          :class="[preview?.line === i + 1 ? 'bg-amber-100' : '', i % 2 === 1 ? 'bg-zinc-50/50' : '']"
+        >
+          <span
+            class="w-10 shrink-0 select-none border-r border-zinc-200 px-2 py-0.5 text-right font-mono text-[10px] text-zinc-400"
+          >
+            {{ i + 1 }}
+          </span>
+          <span class="min-w-0 flex-1 whitespace-pre px-3 py-0.5 font-mono text-[11px] leading-5 text-zinc-700">
+            {{ lineText }}
+          </span>
+        </div>
+      </div>
+    </AppModal>
 
     <!-- 测试用例右键菜单 -->
     <AppContextMenu

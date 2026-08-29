@@ -130,6 +130,8 @@ const INIT_SQL: &str = "
       status TEXT NOT NULL,
       duration REAL NOT NULL DEFAULT 0,
       error_message TEXT,
+      line INTEGER,
+      skip_reason TEXT,
       FOREIGN KEY (execution_id) REFERENCES test_execution_history(id) ON DELETE CASCADE
     );
 
@@ -188,6 +190,30 @@ pub async fn init(app: &AppHandle) -> Result<(), String> {
             .execute(&db)
             .await
             .map_err(|e| format!("Failed to add files_json column: {}", e))?;
+    }
+
+    // 迁移：execution_result_details 增加 line / skip_reason 列（历史版本无此列）
+    let cols = sqlx::query("PRAGMA table_info(execution_result_details)")
+        .fetch_all(&db)
+        .await
+        .map_err(|e| format!("Failed to inspect execution_result_details columns: {}", e))?;
+    let has_line = cols
+        .iter()
+        .any(|row| row.try_get::<String, _>("name").unwrap_or_default() == "line");
+    if !has_line {
+        sqlx::query("ALTER TABLE execution_result_details ADD COLUMN line INTEGER")
+            .execute(&db)
+            .await
+            .map_err(|e| format!("Failed to add line column: {}", e))?;
+    }
+    let has_skip_reason = cols
+        .iter()
+        .any(|row| row.try_get::<String, _>("name").unwrap_or_default() == "skip_reason");
+    if !has_skip_reason {
+        sqlx::query("ALTER TABLE execution_result_details ADD COLUMN skip_reason TEXT")
+            .execute(&db)
+            .await
+            .map_err(|e| format!("Failed to add skip_reason column: {}", e))?;
     }
 
     Ok(())
@@ -761,6 +787,8 @@ pub struct ExecutionDetailPayload {
     pub status: String,
     pub duration: f64,
     pub error_message: Option<String>,
+    pub line: Option<i64>,
+    pub skip_reason: Option<String>,
 }
 
 /// 执行结果明细行（返回前端）
@@ -774,6 +802,8 @@ pub struct ExecutionResultDetailRow {
     pub status: String,
     pub duration: f64,
     pub error_message: Option<String>,
+    pub line: Option<i64>,
+    pub skip_reason: Option<String>,
 }
 
 /// 前端提交的单条生成文件（保存生成明细用）
@@ -813,8 +843,8 @@ pub async fn save_execution_result_details(
     for r in results {
         sqlx::query(
             "INSERT INTO execution_result_details
-               (execution_id, name, file, status, duration, error_message)
-             VALUES (?, ?, ?, ?, ?, ?)",
+               (execution_id, name, file, status, duration, error_message, line, skip_reason)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(execution_id)
         .bind(&r.name)
@@ -822,6 +852,8 @@ pub async fn save_execution_result_details(
         .bind(&r.status)
         .bind(r.duration)
         .bind(&r.error_message)
+        .bind(r.line)
+        .bind(&r.skip_reason)
         .execute(&mut *tx)
         .await
         .map_err(|e| format!("Failed to save execution result detail: {}", e))?;
@@ -840,7 +872,7 @@ pub async fn list_execution_result_details(
 ) -> Result<Vec<ExecutionResultDetailRow>, String> {
     let db = pool(app).await?;
     let rows = sqlx::query(
-        "SELECT id, execution_id, name, file, status, duration, error_message
+        "SELECT id, execution_id, name, file, status, duration, error_message, line, skip_reason
          FROM execution_result_details
          WHERE execution_id = ?",
     )
@@ -859,9 +891,31 @@ pub async fn list_execution_result_details(
                 status: row.try_get("status").map_err(|e| e.to_string())?,
                 duration: row.try_get("duration").map_err(|e| e.to_string())?,
                 error_message: row.try_get("error_message").map_err(|e| e.to_string())?,
+                line: row.try_get("line").map_err(|e| e.to_string())?,
+                skip_reason: row.try_get("skip_reason").map_err(|e| e.to_string())?,
             })
         })
         .collect()
+}
+
+/// 查询一次执行记录所属项目的路径（独立详情窗口定位测试文件用）
+pub async fn get_execution_project_path(
+    app: &AppHandle,
+    execution_id: i64,
+) -> Result<Option<String>, String> {
+    let db = pool(app).await?;
+    let row = sqlx::query(
+        "SELECT p.path
+         FROM test_execution_history h
+         JOIN projects p ON h.project_id = p.id
+         WHERE h.id = ?",
+    )
+    .bind(execution_id)
+    .fetch_optional(&db)
+    .await
+    .map_err(|e| format!("Failed to query execution project path: {}", e))?;
+
+    Ok(row.map(|r| r.try_get("path").unwrap_or_default()))
 }
 
 /// 批量写入一次生成产生的所有测试文件明细

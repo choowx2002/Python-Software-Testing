@@ -30,6 +30,7 @@ import {
   WandSparkles,
 } from "@lucide/vue";
 import { useProjectStore } from "../../../stores/projectStore";
+import { useUIStore } from "../../../stores/uiStore";
 import TreeItem from "../../../components/TreeItem.vue";
 import { interpretError, type InterpretedError } from "../../../utils/errors";
 import { useI18n } from "vue-i18n";
@@ -46,6 +47,7 @@ import { notifyCoverageComplete } from "../../../composables/useNotifications";
 const route = useRoute();
 const router = useRouter();
 const projectStore = useProjectStore();
+const uiStore = useUIStore();
 const { t } = useI18n();
 
 const { setProgress: setTaskProgress, clear: clearTaskProgress } = useTaskbarProgress();
@@ -1104,7 +1106,7 @@ async function openSourceFile(file: FileCoverage) {
     ? file.path
     : `${projectPath}/${file.path}`;
   try {
-    await invoke("open_file", { path: full });
+    await invoke("open_file", { path: full, editor: uiStore.editorCommand });
   } catch (error) {
     console.error("[Coverage] open_file failed:", error);
   }

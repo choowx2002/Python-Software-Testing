@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { X } from "@lucide/vue";
 import HistoryDetailContent from "../components/HistoryDetailContent.vue";
@@ -23,6 +24,24 @@ const detailId = computed<number | null>(() => {
   const n = Number(raw);
   return Number.isNaN(n) ? null : n;
 });
+
+/** 执行记录所属项目路径（定位/打开测试文件用；独立窗口按 execution_id 查） */
+const projectPath = ref("");
+
+async function loadProjectPath() {
+  if (detailType.value !== "execute" || detailId.value === null) return;
+  try {
+    projectPath.value =
+      (await invoke<string | null>("get_execution_project_path", {
+        executionId: detailId.value,
+      })) ?? "";
+  } catch (error) {
+    console.error("[HistoryDetailWindow] get_execution_project_path failed:", error);
+  }
+}
+
+watch([detailType, detailId], loadProjectPath);
+onMounted(loadProjectPath);
 
 const title = computed(() => {
   switch (detailType.value) {
@@ -57,7 +76,7 @@ async function closeWindow() {
 
     <!-- 内容 -->
     <div class="min-h-0 flex-1 overflow-auto p-5">
-      <HistoryDetailContent v-if="detailId !== null" :type="detailType" :id="detailId" :allow-rerun="false" />
+      <HistoryDetailContent v-if="detailId !== null" :type="detailType" :id="detailId" :allow-rerun="false" :project-path="projectPath" />
     </div>
   </div>
 </template>

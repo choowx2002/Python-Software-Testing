@@ -14,6 +14,10 @@ export const useUIStore = defineStore('ui', {
     terminalDark: false,
     /** 系统通知开关：true=开启（默认），false=关闭 */
     notificationsEnabled: true,
+    /** 打开测试/源码文件使用的编辑器命令模板；'' = 系统默认打开。
+     *  支持 {path}（文件绝对路径）与 {line}（行号，可选）占位符，
+     *  例如 'code -g {path}:{line}'。 */
+    editorCommand: "",
     /** 待重跑的失败用例（由历史详情跳转到 Execute 页自动选中并运行） */
     pendingRerunProjectId: null as number | null,
     pendingRerunTestIds: [] as string[]
@@ -27,6 +31,7 @@ export const useUIStore = defineStore('ui', {
     setTerminalWidth(key: string, ratio: number) { this.terminalWidths[key] = ratio },
     setTerminalDark(v: boolean) { this.terminalDark = v },
     setNotificationsEnabled(enabled: boolean) { this.notificationsEnabled = enabled },
+    setEditorCommand(command: string) { this.editorCommand = command },
     resetProjectColWidths() { this.projectColWidths = [3, 1.2, 1.3, 1.6, 1] as number[] },
     resetTerminalWidths() { this.terminalWidths = {} },
     setLastTab(projectId: number, tab: string) {

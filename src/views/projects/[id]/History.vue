@@ -720,6 +720,7 @@ const latestPassRate = computed(() => {
         :type="detailType"
         :id="detailId"
         :compare-id="detailCompareId"
+        :project-path="currentProject?.path ?? ''"
         @rerun-failed="onRerunFailed"
       />
 
