@@ -1,0 +1,24 @@
+@startuml
+title Figure 5.5: Sequence Diagram of the Automated Coverage Analysis (component level).
+participant "Vue\n(Coverage.vue)" as Vue
+participant "Rust Core\n(coverage.rs)" as Rust
+participant "coverage.py" as Cov
+database "SQLite" as DB
+entity "coverage.json" as JSON
+
+note over Vue: triggered manually or via ?autoRun=1 (one-click after execution)
+Vue -> Rust: run_coverage(projectId, path, ...)
+Rust -> Cov: coverage erase
+Rust -> Cov: coverage run --branch -m pytest
+Rust -> Cov: coverage json -o coverage.json
+Cov --> Rust: status
+Rust -> JSON: write coverage.json + meta.json
+Rust -> Rust: parse JSON (format 1/2)
+Rust --> Vue: event coverage-finished {summary}
+Rust -> DB: save coverage_results + coverage_history
+
+Vue -> Rust: get_coverage_detail(filePath)
+Rust -> JSON: read coverage.json + source
+Rust --> Vue: line-level four-state data
+Vue -> Vue: render highlighted code viewer
+@enduml

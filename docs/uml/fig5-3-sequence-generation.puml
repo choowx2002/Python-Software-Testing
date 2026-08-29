@@ -1,0 +1,25 @@
+@startuml
+title Figure 5.3: Sequence Diagram of the Automated Test Generation (component level).
+participant "Vue\n(Generate.vue)" as Vue
+participant "Rust Core\n(generation.rs)" as Rust
+participant "Pynguin" as Py
+database "SQLite\n(generation_history)" as DB
+
+Vue -> Rust: scan_source_files(projectPath)
+Rust --> Vue: source tree
+Vue -> Rust: generate_tests(projectId, path, interpreter, files, config)
+loop modules
+    Rust -> Py: spawn pynguin (per module)
+    Py --> Rust: stdout / stderr
+    Rust --> Vue: events generation-progress / generation-output
+    alt cancel
+        Vue -> Rust: cancel_run(runId)
+    end
+    alt success
+        Rust -> Py: rename_generated_tests.py
+    end
+    Rust -> Rust: count_test_cases per file
+end
+Rust --> Vue: event generation-finished {generatedFiles}
+Rust -> DB: save generation_history + generation_file_details
+@enduml

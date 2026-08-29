@@ -1,0 +1,83 @@
+@startuml
+top to bottom direction
+hide circle
+skinparam classAttributeIconSize 0
+skinparam classFontSize 12
+skinparam classAttributeFontSize 9
+skinparam class {
+  BackgroundColor #FDFDFD
+  BorderColor #444444
+}
+
+class "projects" as PROJ {
+  id <<PK>>
+  name
+  project_path <<UNIQUE>>
+  interpreter_path
+  status
+}
+
+class "regression_suites" as SUITE {
+  id <<PK>>
+  project_id <<FK>>
+  suite_name
+  target_paths
+  custom_params
+}
+
+class "test_execution_history" as EXEC {
+  id <<PK>>
+  project_id <<FK>>
+  regression_suite_id <<FK>>
+  execution_type
+  execution_status
+  total_tests
+  passed / failed / skipped
+}
+
+class "coverage_results" as COVRES {
+  id <<PK>>
+  project_id <<FK>>
+  execution_id
+  total_statement_coverage
+  total_branch_coverage
+}
+
+class "generation_history" as GENHIS {
+  id <<PK>>
+  project_id <<FK>>
+  generation_status
+  total_files / generated_files
+}
+
+class "coverage_history" as COVHIS {
+  id <<PK>>
+  project_id <<FK>>
+  percent_covered
+  total_statements / covered_statements
+}
+
+class "execution_result_details" as EXECDTL {
+  id <<PK>>
+  execution_id <<FK>>
+  name
+  status
+}
+
+class "generation_file_details" as GENFDTL {
+  id <<PK>>
+  generation_id <<FK>>
+  name
+  test_case_count
+}
+
+PROJ ||--o{ SUITE : "1..*"
+PROJ ||--o{ EXEC : "1..*"
+PROJ ||--o{ COVRES : "1..*"
+PROJ ||--o{ GENHIS : "1..*"
+PROJ ||--o{ COVHIS : "1..*"
+SUITE ||--o{ EXEC : "1..* (SET NULL)"
+EXEC ||--o{ EXECDTL : "1..*"
+GENHIS ||--o{ GENFDTL : "1..*"
+EXEC o--o COVRES : "0..1 (optional)"
+@enduml

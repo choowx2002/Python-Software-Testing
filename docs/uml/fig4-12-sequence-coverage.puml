@@ -1,0 +1,37 @@
+@startuml
+title Figure 4.12: Sequence Diagram of the Analyze Code Coverage.
+actor User
+participant "Vue\n(Coverage.vue)" as Vue
+participant "Rust\n(coverage.rs)" as Rust
+participant "coverage.py" as Cov
+database "SQLite" as DB
+entity "coverage.json" as JSON
+
+note over Vue: manual tab OR autoRun=1 from Execute post-run modal
+Vue -> Rust: check_coverage_installed(interpreter)
+alt not installed
+    Vue -> Rust: install_dependencies(["coverage"])
+end
+
+User -> Vue: select source / test files
+Vue -> Rust: run_coverage(projectId, path, ...)
+Rust -> Cov: coverage erase
+Rust -> Cov: coverage run --branch -m pytest
+Rust -> Cov: coverage json -o coverage.json
+Cov --> Rust: status
+Rust -> JSON: write coverage.json + meta.json
+Rust -> Rust: parse JSON (format 1/2)
+Rust --> Vue: event coverage-finished {summary}
+Rust -> DB: save coverage_result + coverage_history
+
+User -> Vue: click a source file
+Vue -> Rust: get_coverage_detail(filePath)
+Rust -> JSON: read coverage.json + source
+Rust --> Vue: four-state line data
+Vue -> Vue: render highlighted viewer + function filter
+
+alt export report
+    User -> Vue: Export (JSON / CSV)
+    Vue -> Rust: export_coverage_report(projectId, format)
+end
+@enduml

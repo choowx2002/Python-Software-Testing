@@ -1,0 +1,48 @@
+@startuml
+title Figure 4.9: Sequence Diagram of the Execute Tests.
+actor User
+participant "Vue\n(Execute.vue)" as Vue
+participant "Rust\n(execution.rs)" as Rust
+participant "pytest" as Py
+database "SQLite" as DB
+
+Vue -> Rust: scan_test_files / collect_test_cases
+Rust -> Py: pytest --collect-only -q
+Py --> Rust: collected cases
+Rust --> Vue: test case list
+
+User -> Vue: select scope + pytest args
+Vue -> Rust: run_tests(...)
+Rust -> Py: spawn pytest -v --junitxml (xunit1)
+activate Py
+loop running
+    Py --> Rust: stdout / stderr lines
+    Rust --> Vue: event test-output
+end
+
+alt user cancels
+    Vue -> Rust: cancel_run(runId)
+    Rust -> Py: SIGTERM -> 2s -> SIGKILL
+end
+
+Py --> Rust: exit code + JUnit XML
+deactivate Py
+Rust -> Rust: parse JUnit (quick-xml)
+Rust --> Vue: event test-finished
+Rust -> DB: save_execution_history
+Rust -> DB: save_execution_result_details
+
+alt post-run modal
+    alt save as suite
+        Vue -> Rust: save_regression_suite
+        Rust -> DB: INSERT regression_suites
+    else run coverage
+        Vue -> Vue: push Coverage?autoRun=1
+    end
+end
+
+alt one-click suite rerun
+    Vue -> Rust: run_regression_suite(suiteId)
+    Rust -> Rust: run_tests_core (REGRESSION)
+end
+@enduml

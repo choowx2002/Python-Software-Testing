@@ -1,0 +1,32 @@
+@startuml
+title Figure 4.8: Sequence Diagram of the Setup Project Environment.
+actor User
+participant "Vue\n(Import.vue)" as Vue
+participant "Rust\n(env.rs)" as Rust
+participant "Python\n(venv / pip)" as Py
+database "SQLite\n(projects)" as DB
+
+User -> Vue: select project folder
+Vue -> Rust: validate_project_directory(path)
+Rust --> Vue: validation result
+Vue -> Rust: detect_python_env(path)
+Rust --> Vue: {pythonPath, venvExists, dependencies}
+
+alt no virtual environment
+    Vue -> Rust: create_virtual_env(path)
+    Rust -> Py: python -m venv .venv
+end
+
+loop missing dependencies
+    Vue -> Rust: install_dependencies(packages)
+    Rust -> Py: pip install <pkg>
+    Rust --> Vue: event install_step
+end
+
+Vue -> Rust: add_project(name, path, interpreter)
+Rust -> DB: INSERT projects
+DB --> Rust: project id
+Rust --> Vue: project id
+
+note over Vue, Rust: optional entry from Dashboard:\nclone_repository -> git clone -> add_project
+@enduml

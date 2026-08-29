@@ -1,0 +1,29 @@
+@startuml
+title Figure 5.2: Sequence Diagram of the Test Environment Setup (component level).
+participant "Vue\n(Import.vue)" as Vue
+participant "Rust Core\n(env.rs)" as Rust
+participant "Python Engine\n(venv / pip)" as Py
+database "SQLite\n(projects)" as DB
+
+Vue -> Rust: validate_project_directory(path)
+Rust --> Vue: validation result
+Vue -> Rust: detect_python_env(path)
+Rust --> Vue: {pythonPath, pythonVersion, venvExists, dependencies}
+
+alt no venv
+    Vue -> Rust: create_virtual_env(path)
+    Rust -> Py: python -m venv .venv
+    Py --> Rust: status
+end
+
+loop missing dependencies
+    Vue -> Rust: install_dependencies(packages)
+    Rust -> Py: pip install <pkg>
+    Rust --> Vue: event install_step
+end
+
+Vue -> Rust: add_project(name, path, interpreterPath)
+Rust -> DB: INSERT projects (UNIQUE project_path)
+DB --> Rust: id
+Rust --> Vue: project id
+@enduml

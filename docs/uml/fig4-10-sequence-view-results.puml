@@ -1,0 +1,33 @@
+@startuml
+title Figure 4.10: Sequence Diagram of the View Test Results.
+actor User
+participant "Vue\n(Execute / History)" as Vue
+participant "Rust\n(db_commands.rs)" as Rust
+database "SQLite" as DB
+participant "Detail Window\n(WebviewWindow)" as Win
+
+Rust --> Vue: event test-finished (result cards)
+User -> Vue: expand failure / copy error
+User -> Vue: open test file at line
+Vue -> Rust: open_file(path, editor?, line)
+
+User -> Vue: open History view
+Vue -> Rust: list_execution_history(projectId)
+Rust -> DB: SELECT executions
+Rust --> Vue: timeline entries
+
+User -> Vue: select an execution entry
+Vue -> Rust: list_execution_result_details(executionId)
+Rust -> DB: SELECT details
+Rust --> Vue: per-test-case details
+
+alt standalone window
+    Vue -> Rust: get_execution_project_path(executionId)
+    Vue -> Win: open ?detail=execute&id=<id>
+    Win -> Rust: list_execution_result_details(executionId)
+end
+
+alt export
+    Vue -> Rust: save_text_file(history.json / csv)
+end
+@enduml

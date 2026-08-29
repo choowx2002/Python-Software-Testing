@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
 import { HelpCircle } from '@lucide/vue'
-// @ts-expect-error Teleport used only in template
-import { Teleport } from 'vue'
 
 const props = defineProps<{
   title: string
@@ -58,9 +56,9 @@ const { title, content } = props
     >
       <HelpCircle :class="iconSize ? `h-${iconSize} w-${iconSize}` : 'h-3.5 w-3.5'" />
     </button>
-    <Teleport to="body" v-if="open">
+    <Teleport to="body">
       <Transition name="popover">
-        <div class="help-popover-overlay" @click.self="open = false">
+        <div v-if="open" class="help-popover-overlay" @click.self="open = false">
           <div ref="panelRef" class="help-popover-panel" :style="panelStyle" @click.stop>
             <h4 class="text-sm font-semibold text-zinc-900">{{ title }}</h4>
             <p class="mt-1 whitespace-pre-line text-xs leading-5 text-zinc-600">{{ content }}</p>

@@ -1,0 +1,37 @@
+@startuml
+title Figure 4.11: Sequence Diagram of the Generate Unit Tests.
+actor User
+participant "Vue\n(Generate.vue)" as Vue
+participant "Rust\n(generation.rs)" as Rust
+participant "Pynguin" as Py
+database "SQLite" as DB
+
+Vue -> Rust: scan_source_files(projectPath)
+Rust --> Vue: source file tree
+Vue -> Rust: check_generation_env(interpreter)
+Rust --> Vue: {pythonVersion, pynguinVersion}
+
+alt BOM files detected
+    Vue -> Rust: check_python_bom(files)
+    Rust --> Vue: BOM file list
+    User -> Vue: confirm fix
+    Vue -> Rust: strip_python_bom(files)
+end
+
+User -> Vue: select modules + advanced settings
+Vue -> Rust: generate_tests(projectId, path, interpreter, files, config)
+loop for each module
+    Rust -> Py: spawn pynguin (algorithm, time, seed, ...)
+    Py --> Rust: stdout / stderr
+    Rust --> Vue: events generation-progress / generation-output
+    alt user cancels
+        Vue -> Rust: cancel_run(runId)
+    end
+    alt generation succeeded
+        Rust -> Py: rename_generated_tests.py
+    end
+    Rust -> Rust: count_test_cases per file
+end
+Rust --> Vue: event generation-finished {generatedFiles}
+Rust -> DB: save generation_history + generation_file_details
+@enduml

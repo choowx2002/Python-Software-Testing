@@ -1,0 +1,26 @@
+@startuml
+title Figure 4.4: Activity Diagram of the View Test Results.
+start
+:Render result summary cards\n(passed / failed / skipped / xfailed counts);
+:Render per-test-case list with status, duration, line number;
+if (User expands a failure?) then (yes)
+  :Show captured error message / trace;
+  :Copy error text / copy path with line;
+else (no)
+endif
+
+if (User opens the test file?) then (yes)
+  :open_file(path, editor, line)\n(custom editor template supported);
+else (no)
+endif
+
+if (User wants history?) then (yes)
+  :Open History view;
+  :list_execution_history(projectId)\ntimeline of executions;
+  :Select an entry -> list_execution_result_details(executionId);
+  :Open detail in standalone window\nget_execution_project_path(executionId);
+  :Export history (save_text_file json/csv);
+else (no)
+endif
+stop
+@enduml

@@ -1,0 +1,39 @@
+@startuml
+title Figure 4.7: Activity Diagram of the View History and Trends.
+start
+:Open History view;
+:Load three timelines\nlist_execution_history / list_generation_history / list_coverage_history;
+:Render combined trend chart\n(CombinedTrendChart, pure SVG);
+if (User switches type?) then (yes)
+  :Filter timeline: executions / generations / coverage runs;
+else (no)
+endif
+
+if (User selects an entry?) then (yes)
+  if (Entry type?) then (Execution)
+    :list_execution_result_details(executionId)\nper-test-case details;
+  elseif (Generation) then
+    :list_generation_file_details(generationId)\ngenerated files & test counts;
+  else (Coverage)
+    :get_coverage_history_files(historyId)\nper-file line-level data;
+  endif
+
+  if (Compare with previous coverage?) then (yes)
+    :Select previous run -> show delta / trend;
+  else (no)
+  endif
+
+  if (Open file / export?) then (yes)
+    :open_file(path, editor, line);
+    :save_text_file(json / csv) export;
+  else (no)
+  endif
+
+  if (Standalone detail window?) then (yes)
+    :Open WebviewWindow "detail"\nHistoryDetailContent;
+  else (no)
+  endif
+else (no)
+endif
+stop
+@enduml

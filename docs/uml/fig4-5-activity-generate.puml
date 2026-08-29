@@ -1,0 +1,30 @@
+@startuml
+title Figure 4.5: Activity Diagram of the Generate Unit Tests.
+start
+:scan_source_files(projectPath)\nsource tree (skips venv/tests/__init__/conftest);
+:check_generation_env(interpreter)\nPython & Pynguin version health check;
+if (UTF-8 BOM files detected?) then (yes)
+  :check_python_bom(files)\nshow confirmation dialog;
+  :strip_python_bom(files)\nnon-destructive BOM removal;
+else (no)
+endif
+
+:Select target module(s);
+:Configure advanced settings\nalgorithm (MOSA/DYNAMOSA/WSPA/RANDOM), search time,\nseed, chromosome length, population, assertion generation;
+:generate_tests(...)\nper-module Pynguin subprocess;
+repeat
+  :Stream generation progress\n(events: generation-progress / generation-output);
+repeat while (More modules?) is (yes) not (no)
+
+if (User cancelled?) then (yes)
+  :cancel_run(runId);
+  stop
+else (no)
+endif
+
+:Run rename_generated_tests.py\n(semantic renaming of test_case_N names);
+:Scan output directory\ncount_test_cases -> test_case_count per file;
+:Emit generation-finished {generatedFiles};
+:Save generation history\n(save_generation_history + save_generation_file_details);
+stop
+@enduml

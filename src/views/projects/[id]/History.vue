@@ -202,6 +202,8 @@ const detailTitle = computed(() => {
       return t("history.detail.titleCoverage");
     case "generation":
       return t("history.detail.titleGeneration");
+    default:
+      return "";
   }
 });
 

@@ -1,0 +1,24 @@
+@startuml
+title Figure 5.4: Sequence Diagram of the Test Execution (component level).
+participant "Vue\n(Execute.vue)" as Vue
+participant "Rust Core\n(execution.rs)" as Rust
+participant "pytest" as Py
+database "SQLite\n(history tables)" as DB
+
+Vue -> Rust: run_tests(projectId, path, interpreter, testCases, pytestArgs, suiteId?)
+Rust -> Py: spawn pytest -v --junitxml (xunit1)
+activate Py
+loop running
+    Py --> Rust: stdout / stderr lines
+    Rust --> Vue: event test-output
+end
+alt cancel
+    Vue -> Rust: cancel_run(runId)
+    Rust -> Py: SIGTERM -> 2s -> SIGKILL
+end
+Py --> Rust: exit code + JUnit XML
+deactivate Py
+Rust -> Rust: parse JUnit XML
+Rust --> Vue: event test-finished
+Rust -> DB: save execution history + result details
+@enduml

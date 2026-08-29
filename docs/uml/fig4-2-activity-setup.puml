@@ -1,0 +1,28 @@
+@startuml
+title Figure 4.2: Activity Diagram of the Setup Project Environment.
+start
+:User selects a local Python project folder (Import wizard);
+:validate_project_directory(projectPath);
+if (Directory valid?) then (no)
+  :Display user-friendly error;
+  stop
+else (yes)
+endif
+
+:detect_python_env(projectPath)\n(venv detection -> global fallback, dependency check);
+if (Virtual environment exists?) then (no)
+  :create_virtual_env(projectPath)\npython -m venv .venv;
+else (yes)
+endif
+
+if (Dependencies missing?) then (yes)
+  repeat
+    :install_dependencies(package)\npip install <pkg> (event: install_step);
+  repeat while (More missing packages?) is (yes) not (no)
+else (no)
+endif
+
+:add_project(name, path, interpreterPath)\n(duplicate path rejected);
+:Enter project context (Overview page);
+stop
+@enduml

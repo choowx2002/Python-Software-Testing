@@ -1,0 +1,36 @@
+@startuml
+title Figure 4.3: Activity Diagram of the Execute Tests.
+start
+:scan_test_files(projectPath)\nrecursive scan of tests/ directory;
+:collect_test_cases(projectPath)\npytest --collect-only -q;
+:Select scope: all files / one file / single test case\n(Shift multi-select, search filter);
+:Configure pytest preset (Standard/Quick/Debug/Stop-on-Failure)\nor custom arguments;
+:run_tests(...)\nspawn pytest -v --junitxml (junit_family=xunit1);
+repeat
+  :Stream execution logs\n(event: test-output, real-time terminal);
+repeat while (Process running?) is (yes) not (no)
+
+if (User pressed Stop?) then (yes)
+  :cancel_run(runId)\nSIGTERM -> 2 s -> SIGKILL;
+  :Emit test-finished (success = false);
+  stop
+else (no)
+endif
+
+:Parse JUnit XML\n(passed / failed / error / skipped / xfailed);
+:Emit test-finished {passed, failed, skipped, results};
+:Save execution history\n(save_execution_history + save_execution_result_details);
+
+if (Failed cases exist?) then (yes)
+  :Highlight failed cases\nRerun Failed (filter failed results);
+else (no)
+endif
+
+if (Post-run action?) then (Save as suite)
+  :save_regression_suite(name, targets, params);
+elseif (Run coverage) then
+  :Jump to Coverage view?autoRun=1\n(one-click coverage collection);
+else (Close)
+endif
+stop
+@enduml

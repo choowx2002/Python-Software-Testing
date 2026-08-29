@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import type { Component } from 'vue'
 
 interface MenuItem {
   label?: string
-  icon?: any
+  icon?: Component
   action?: () => void
   disabled?: boolean
   divider?: boolean

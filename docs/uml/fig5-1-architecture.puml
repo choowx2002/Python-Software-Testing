@@ -1,0 +1,25 @@
+@startuml
+title Figure 5.1: High-Level Architecture of the Automated Testing Software.
+skinparam componentStyle rectangle
+
+package "Vue 3 Frontend (UI layer)" as FE {
+  component "Views, Stores, Composables, i18n\n(Dashboard · Import · Execute ·\nGenerate · Coverage · History · Settings)" as V
+}
+
+package "Rust Core (Tauri v2 · orchestration)" as BE {
+  component "Typed IPC commands\n(env · execution · generation ·\ncoverage · suites · files · db)" as R1
+  component "Async event streaming\n(test-* · coverage-* · generation-*)" as R2
+}
+
+package "Python Engine (isolated subprocesses)" as PE {
+  component "pytest · Pynguin · coverage.py" as P
+}
+
+database "SQLite\n(8 tables)" as SQL
+entity "coverage.json\ncache" as JSON
+
+FE --> BE : Tauri IPC\n(typed commands / events)
+BE --> PE : stdio subprocess\n(on demand)
+BE --> SQL : metadata & history
+BE --> JSON : coverage detail
+@enduml

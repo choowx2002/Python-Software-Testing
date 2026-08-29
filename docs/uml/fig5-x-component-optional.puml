@@ -1,0 +1,49 @@
+@startuml
+title Optional Figure: UML Component Diagram of Testmate (Tauri v2 three-runtime).
+left to right direction
+skinparam componentStyle rectangle
+skinparam nodeStyle rectangle
+
+node "Vue 3 Frontend (Webview)" as FE {
+  component "Views\nDashboard / Import / Execute /\nGenerate / Coverage / History / Settings" as V_VIEWS
+  component "Pinia Stores\n(projectStore / uiStore)" as V_STORE
+  component "Composables\n(keyboard / notifications /\ntaskbar / window title / tour)" as V_COMP
+  component "i18n\n(en / zh, 570 keys)" as V_I18N
+}
+
+node "Rust Core (Tauri v2)" as BE {
+  component "env" as C_ENV
+  component "execution" as C_EXEC
+  component "generation" as C_GEN
+  component "coverage" as C_COV
+  component "suites" as C_SUITE
+  component "files" as C_FILE
+  component "db (sqlx)" as C_DB
+  component "state\n(process registry / cancellation)" as C_STATE
+  component "Event Bus\n(test-* / coverage-* /\ngeneration-* / install_step /\nenv-fix-step)" as C_EVENT
+}
+
+node "Python Engine (isolated, on-demand)" as PE {
+  component "pytest" as P_PYTEST
+  component "Pynguin" as P_PYNGUIN
+  component "coverage.py" as P_COV
+}
+
+database "SQLite\n(8 tables)" as SQL
+node "Local Storage" as FS {
+  file "coverage.json / meta.json\n(app_data/<projectId>/)" as F_JSON
+  file "running_pids.json" as F_PID
+}
+
+FE --> BE : "28 typed Tauri IPC commands"
+BE --> FE : "6 event channels (async streaming)"
+C_ENV --> P_PYTEST : stdio
+C_ENV --> P_PYNGUIN : stdio
+C_EXEC --> P_PYTEST : stdio
+C_GEN --> P_PYNGUIN : stdio
+C_COV --> P_COV : stdio
+C_STATE --> P_PYTEST : "SIGTERM / SIGKILL (cancel)"
+C_DB --> SQL : "schema init + migrations + CRUD"
+C_COV --> F_JSON : "write coverage detail cache"
+C_STATE --> F_PID : "persist run ids"
+@enduml

@@ -1,0 +1,41 @@
+@startuml
+title Figure 4.1: Use-Case Diagram.
+left to right direction
+skinparam rectangle {
+  BackgroundColor #FDFDFD
+}
+
+actor "User\n(Student / Novice Developer)" as User
+actor "Python Execution Environment" as PyEnv
+actor "Local Storage" as Storage
+
+rectangle "Automated Testing Software (Testmate)" {
+  usecase "UC01\nSetup Project\nEnvironment" as UC01
+  usecase "UC02\nExecute Tests and\nView Results" as UC02
+  usecase "UC03\nGenerate\nUnit Tests" as UC03
+  usecase "UC04\nAnalyze Code\nCoverage" as UC04
+  usecase "UC05\nView History\nand Trends" as UC05
+
+  usecase "Collect Coverage Data" as INC_Cov
+  usecase "Save as Regression Suite" as EXT_Suite
+  usecase "Clone Repository" as EXT_Clone
+}
+
+User --> UC01
+User --> UC02
+User --> UC03
+User --> UC04
+User --> UC05
+
+PyEnv --> UC01
+PyEnv --> UC02
+PyEnv --> UC03
+Storage --> UC04
+Storage --> UC05
+
+UC02 ..> INC_Cov : <<include>>
+UC02 ..> EXT_Suite : <<extend>>
+UC01 ..> EXT_Clone : <<extend>>
+UC05 ..> UC02 : <<extend>>
+UC05 ..> UC04 : <<extend>>
+@enduml

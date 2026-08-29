@@ -1,0 +1,42 @@
+@startuml
+title Figure 4.13: Sequence Diagram of the View History and Trends.
+actor User
+participant "Vue\n(History.vue)" as Vue
+participant "Rust\n(db_commands.rs)" as Rust
+database "SQLite" as DB
+participant "Detail Window\n(WebviewWindow)" as Win
+
+User -> Vue: open History view
+Vue -> Rust: list execution / generation / coverage history
+Rust -> DB: SELECT three history tables
+Rust --> Vue: unified timeline
+Vue -> Vue: render CombinedTrendChart (SVG)
+
+User -> Vue: select an entry
+alt execution entry
+    Vue -> Rust: list_execution_result_details(executionId)
+else generation entry
+    Vue -> Rust: list_generation_file_details(generationId)
+else coverage entry
+    Vue -> Rust: get_coverage_history_files(historyId)
+end
+
+alt coverage comparison
+    User -> Vue: compare with previous run
+    Vue -> Vue: render delta / trend
+end
+
+alt open file at line
+    Vue -> Rust: open_file(path, editor?, line)
+end
+
+alt export
+    Vue -> Rust: save_text_file(json / csv)
+end
+
+alt standalone window
+    Vue -> Rust: get_execution_project_path(executionId)
+    Vue -> Win: open ?detail=<type>&id=<id>
+    Win -> Rust: load details
+end
+@enduml

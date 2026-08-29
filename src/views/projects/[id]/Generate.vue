@@ -939,7 +939,7 @@ onMounted(() => {
 // Ctrl+` 展开/收起终端
 usePageShortcuts(
   { 'ctrl+`': () => terminalRef.value?.toggle() },
-  () => !isGenerating,
+  () => !isGenerating.value,
 );
 
 const terminalRef = ref<InstanceType<typeof TerminalPanel> | null>(null);

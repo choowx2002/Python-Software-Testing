@@ -56,7 +56,8 @@ const dbPath = ref('')
 const isLoading = ref(true)
 const error = ref<string | null>(null)
 const expandedTables = ref<Set<string>>(new Set())
-const tableData = ref<Record<string, any[]>>({})
+type TableRow = Record<string, unknown>
+const tableData = ref<Record<string, TableRow[]>>({})
 const loadingDataFor = ref<string | null>(null)
 
 // ============================================
@@ -138,7 +139,7 @@ async function loadTableData(tableName: string) {
   loadingDataFor.value = tableName
   try {
     const db = await getDatabase()
-    const rows = await db.select<any[]>(
+    const rows = await db.select<TableRow[]>(
       `SELECT * FROM ${tableName} LIMIT 10`
     )
     tableData.value[tableName] = rows || []

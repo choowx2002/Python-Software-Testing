@@ -1,0 +1,1096 @@
+DESIGN AND DEVELOPMENT OF AN AUTOMATED TESTING SOFTWARE FOR UNIT AND REGRESSION TESTING WITH CODE COVERAGE ANALYSIS
+CHOO WEI XIANG
+UNIVERSITI TUNKU ABDUL RAHMAN
+DESIGN AND DEVELOPMENT OF AN AUTOMATED TESTING SOFTWARE FOR UNIT AND REGRESSION TESTING WITH CODE COVERAGE ANALYSIS
+CHOO WEI XIANG
+A project report submitted in partial fulfilment of the
+requirements for the award of Bachelor of Software
+Engineering with Honours
+Lee Kong Chian Faculty of Engineering and Science
+Universiti Tunku Abdul Rahman
+May 2026
+
+=== PAGE BREAK ===
+
+DECLARATION STATEMENT
+I hereby declare that this project report is my original work, with all sources duly acknowledged, and that it has not been submitted previously or concurrently for any degree or award at UTAR or elsewhere. I also declare the following (check the boxes if applicable):
+☑ Generative AI tools (e.g., ChatGPT, Gemini, Copilot, etc.) were used for language refinement, such as grammar correction and readability improvement.
+☑ Vibe coding tools and/or frameworks (e.g., Replit Agent, Cursor Composer, Bolt, etc.) were used in project development.
+⬜ Other declaration(s), if any (please consult your supervisor for guidance in completing this section):
+_________________________________________________________________________________________________________________________
+I take full responsibility for the originality, accuracy, and integrity of all content presented in this report. No Generative AI tools were used to manipulate project data and results in ways that could cause falsification or misrepresentation.
+Name
+:
+CHOO WEI XIANG
+ID No.
+:
+2400056
+Date
+:
+22/04/2026
+COPYRIGHT STATEMENT
+© 2026, CHOOWEIXIANG. All right reserved.
+This final year project report is submitted in partial fulfilment of the requirements for the Bachelor of Software Engineering with Honours. This final year project report represents the work of the author, except where due acknowledgement has been made in the text. No part of this final year project report may be reproduced, stored, or transmitted in any form or by any means, whether electronic, mechanical, photocopying, recording, or otherwise, without the prior written permission of the author or UTAR, in accordance with UTAR’s Intellectual Property Policy.
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+TABLE OF CONTENTS
+
+=== PAGE BREAK ===
+
+DECLARATIONi
+
+=== PAGE BREAK ===
+
+TABLE OF CONTENTSii
+
+=== PAGE BREAK ===
+
+LIST OF TABLESv
+
+=== PAGE BREAK ===
+
+LIST OF FIGURESvi
+
+=== PAGE BREAK ===
+
+LIST OF SYMBOLS / ABBREVIATIONSix
+
+=== PAGE BREAK ===
+
+LIST OF APPENDICESx
+CHAPTER
+CHAPTER 1 1
+INTRODUCTION1
+1.1 General Introduction1
+1.2 Importance of the Study2
+1.3 Problem Statement2
+1.3.1 Skipped Testing Practices and the Educational Gap in Small-Scale Python Projects3
+1.3.2 Fragmented Toolchains and High Configuration Overhead4
+1.3.3 Manual Unit Test Creation as a Knowledge Barrier4
+1.3.4 Invisible Regression Verification and Coverage Interpretation5
+1.4 Aim and Objectives6
+1.5 Scope and Limitation of the Study7
+CHAPTER 2 9
+LITERATURE REVIEW9
+2.1 Introduction9
+2.2 Concept of Unit Testing9
+2.3 Test Case Generation10
+2.4 Concept of Regression Testing10
+2.5 Code Coverage Analysis11
+2.6 Python Testing Ecosystem12
+2.6.1 Text Execution Library Comparison12
+2.6.2 Test Case Generation Comparison1
+2.6.3 Code Coverage Tools1
+2.7 Summary1
+CHAPTER 3 1
+METHODOLOGY AND WORK PLAN1
+3.1 Introduction1
+3.2 Software Development Methodology1
+3.3 Development Tools and Environment1
+3.4 Work Breakdown Structure (WBS)1
+3.5 Gantt Chart1
+3.6 Risk Management and Mitigation1
+3.7 Summary1
+CHAPTER 4 1
+PROJECT SPECIFICATION1
+4.1 Introduction1
+4.2 System Requirements1
+4.2.1 Functional Requirements1
+4.2.2 Non-Functional Requirements1
+4.3 Use Case1
+4.3.1 Actors Identification1
+4.3.2 Use-Case Diagram1
+4.3.3 Use-Case 1: Setup Project Environment1
+4.3.4 Use-Case 2: Execute Tests and View Results1
+4.3.5 Use-Case 3: Generate Unit Tests1
+4.3.6 Use-Case 4: Analyze Code Coverage1
+4.4 Activity Diagrams1
+4.5 Sequences Diagrams1
+CHAPTER 5 1
+SYSTEM DESIGN1
+5.1 High-Level Architecture Design1
+5.2 Component Interaction1
+5.2.1 Test Environment Setup1
+5.2.2 Automated Test Generation1
+5.2.3 Test Execution1
+5.2.4 Automated Coverage Analysis1
+5.3 Database and Data Storage Design1
+5.3.1 Multi-Project Data Isolation Strategy1
+5.3.2 Entity-Relationship Diagram1
+5.3.3 Data Dictionary1
+5.4 Prototype User Interface Design1
+5.4.1 Project Management Dashboard1
+5.4.2 Project Management Dashboard1
+REFERENCES1
+
+=== PAGE BREAK ===
+
+LIST OF TABLES
+Table 2.1: Comparison of unittest, nose2, and pytest.10
+Table 2.2: Comparison of Test Case Generation Approaches12
+Table 2.3: Selected Tools and Frameworks14
+Table 3.1: Risk Management and Mitigation21
+Table 4.1: Functional Requirements24
+Table 4.2: Non-Functional Requirements25
+Table 4.3: Actors Identification26
+Table 4.4: Use-Case Description of the Setup Project Environment26
+Table 4.5: Use-Case Description of Execute Tests and View Results29
+Table 4.6: Use-Case Description of Generate Unit Tests32
+Table 4.7: Use-Case Description of Analyze Code Coverage35
+
+=== PAGE BREAK ===
+
+LIST OF FIGURES
+Figure 3.1: Gantt Chart.20
+Figure 4.1: Use-Case Diagram of the Automated Testing Software.26
+Figure 4.2: Activity Diagram of the Setup Project Environment.39
+Figure 4.3: Activity Diagram of the Execute Tests.40
+Figure 4.4: Activity Diagram of the View Test Results.41
+Figure 4.5: Activity Diagram of the Generate Unit Tests.42
+Figure 4.6: Activity Diagram of the Analyze Code Coverage.43
+Figure 4.7: Sequence Diagram of the Setup Project Environment.44
+Figure 4.8: Sequence Diagram of the Execute Tests.45
+Figure 4.9: Sequence Diagram of the View Test Results.46
+Figure 4.10: Sequence Diagram of the Generate Unit Tests.47
+Figure 4.11: Sequence Diagram of the Analyze Code Coverage.48
+Figure 5.1: High-Level Architecture of the Automated Testing Software.50
+Figure 5.2: Sequence Diagram of the Environment Setup.51
+Figure 5.3: Sequence Diagram of the Automated Test Generation.52
+Figure 5.4: Sequence Diagram of the Test Execution.53
+Figure 5.5: Sequence Diagram of the Automated Coverage Analysis.54
+INTRODUCTION
+General Introduction
+Nowadays, software testing is a very important phase in the software development lifecycle. The aim of it is to ensure the reliability and correctness of the software. In modern development practices, major big technology companies have the position or even specific department for software testing. This position or department is responsible for verifying software quality and detecting potential defects.
+As software continues to grow in scale and complexity, manual testing becomes increasingly time-consuming as they have to plan and compare the actual result with the expected result. This situation has led to the emergence of automated software testing techniques. Automated testing provides several advantages for software development which are the reduction of repetitive work, improved tester productivity, minimization of human errors, and more consistent testing outcomes (Ammann and Offutt, 2016).
+Currently even though a lot of mature testing tools exist, they are still used as standalone tools which require developers to manually setup and orchestrate. This kind of complex setup is a challenge for students and developers working on academic or small-scale projects. They often struggle at the beginning phase which leads them to skip the testing phase on the software project.
+Therefore, this software addresses this situation by proposing an automated testing framework specifically designed for Python projects. This software provides a straight-through service such as test generation, test execution, regression text and code coverage analysis. Not only that, the software also provides a graphic user interface to lower the barrier for students and novice developers. They might adopt proper testing practices, reducing manual effort and improving code quality with it.
+Importance of the Study
+The importance of this study is to reduce the learning curve for students and novice developers when implementing testing and the necessary tools. Nowadays, those existing testing frameworks require complex configuration and setup. This complexity has been identified as a key barrier to the adoption of testing practices among developers (Rafique & Mišić, 2013). This technical burden may affect them and cause them to give up on the idea of learning testing. To address this issue, the software system simplifies the configuration process and eliminates unnecessary complexity. This allows users to focus on learning the test design and logical reasoning. 
+In addition, the system establishes a rapid feedback loop. While supporting efficient development workflows, it helps developers cultivate a quality-oriented mindset. It provides immediate feedback on test results and code coverage metrics. Developers can quickly identify and resolve defects, thereby making testing a natural and continuous part of the development process. This not only encourages the adoption of testing best practices but also reinforces the emphasis on software quality, which is widely recognized as a fundamental principle of modern software engineering (Ammann & Offutt, 2016).
+Problem Statement
+Despite the recognised importance of software testing in ensuring code quality and reliability (Ammann and Offutt, 2016), the practical adoption of systematic testing practices among students and novice developers working on small-scale Python projects remains limited. Recent empirical studies at computing-education venues have begun to quantify this gap. Bai, Smith and Stolee (2021), surveying 54 students from two universities, reported that most students were ineffective in finding known defects in a controlled test-design task, and Showler, Miljanovic and Bradbury (2025), analysing 1014 tests written by 12 student groups in an undergraduate Software Quality Assurance course, found that the test suites produced under required Test-Driven Development practices still contained a disproportionately high number of duplicate and superficial tests. The four sub-sections that follow identify the structural causes of these observed outcomes and connect each cause to one of the three capabilities which are unit testing, regression testing, and code coverage analysis.
+Skipped Testing Practices and the Educational Gap in Small-Scale Python Projects
+The most direct evidence of the adoption gap comes from controlled student studies. Bai et al. (2021) surveyed 54 students from two universities and assigned them black-box and white-box testing tasks using real software projects. They reported that "most students were ineffective in finding known defects" despite being given the test cases they would have written as a reference solution (Bai et al., 2021). This is not an outcome of low motivation: Rafique and Mišić (2013), in a meta-analysis of Test-Driven Development studies, reported that the productivity overhead of disciplined testing practices is a recurring concern in contexts where automated tooling and guidance are absent, indicating that the barrier is structural rather than motivational. Showler et al. (2025) reinforced this conclusion from a complementary angle, finding that even in courses where Test-Driven Development was a mandatory practice, student groups produced test suites with a high proportion of duplicate and happy-path-only tests, suggesting that the requirement to test does not by itself translate into effective test design.
+The consequence of this bypass is twofold. First, students graduate without internalising testing as a routine practice, leaving them underprepared for industrial roles in which testing competence is expected (Pressman and Maxim, 2020). Second, the iterative code-quality improvements that continuous testing enables are absent from their projects, leading to compounding defects in later development phases. This educational gap directly contradicts the curriculum's intent to produce quality-oriented software engineers and suggests that the resolution requires not additional motivation but a reduction in the structural cost of entry.
+Fragmented Toolchains and High Configuration Overhead
+Even when students recognise the value of testing, the practical setup of a Python testing environment introduces substantial friction. Modern Python testing requires orchestrating at least three independent tools: a test execution framework such as pytest, a coverage measurement tool such as coverage.py, and an optional automated test generation tool such as Pynguin (Lukasczyk and Fraser, 2022). Each tool introduces its own configuration conventions such as pytest.ini or pyproject.toml for pytest, .coveragerc for coverage.py, and command-line arguments for Pynguin. These configurations rarely interoperate without manual coordination. Lukasczyk and Fraser (2022) acknowledged this challenge in their presentation of Pynguin, noting that even experienced researchers find the integration of multiple testing utilities into a single coherent workflow to be a non-trivial engineering task.
+This overhead is not merely theoretical. Showler et al. (2025) reported that their participating student groups still produced test suites with the structural problems enumerated in 1.3.1 above. Although this study did not explicitly examine configuration overhead as an independent variable, the observations suggest that even with adequate tools, configuration and integration costs remain a significant source of friction during development. For students lacking such course guidance, the mental effort required to understand the configuration models of various tools often outweighs the expected benefits of conducting tests. Consequently, the testing phase is not only neglected but also hindered by setup processes that are difficult for novice developers to handle.
+Manual Unit Test Creation as a Knowledge Barrier
+When students do attempt to write tests, they face a knowledge barrier that compounds the configuration overhead. Effective unit testing requires familiarity with techniques such as equivalence partitioning, boundary value analysis, and coverage criteria. These techniques are typically only introduced in advanced software engineering courses (Ammann and Offutt, 2016). The behavioural signature of this barrier is now well documented. Showler et al. (2025), analysing 1014 tests from 12 student groups, found that the groups were "significantly more likely to test happy paths than invalid inputs" and "inefficiently tested" happy paths and explicit requirements, "resulting in a higher proportion of software tests with duplicate intent" (Showler et al., 2025). Bai et al. (2021) reached a complementary conclusion, identifying six test smells in student-written code and reporting that the most common smells were "ignoring setups in the test code and testing happy path only" (Bai et al., 2021).
+These inefficiencies are not simply a function of effort. Fraser and Arcuri (2013) demonstrated that automated search-based test generation can produce test suites with branch coverage comparable to, and in some cases exceeding, those written manually by experienced developers, indicating that the manual approach has structural limitations even in expert hands. On real Python code, Lukasczyk and Fraser (2022) reported that Pynguin's DynaMOSA algorithm achieves a mean branch coverage of 67.97% across 118 modules from 17 open-source libraries within a fixed 600-second budget; a random baseline achieves only 63.57% under the same conditions. The gap between these automated data and the behavioral characteristics of student-written tests quantifies the knowledge barriers faced by novice developers and prompts the inclusion of an automated test generation module in the proposed system.
+ Invisible Regression Verification and Coverage Interpretation
+The third barrier affects the two capabilities that students are least equipped to evaluate on their own are regression testing and code coverage analysis. Regression testing requires re-running a previously validated test suite to confirm that recent changes have not introduced new defects (Ammann and Offutt, 2016). In industrial practice this is automated through continuous integration pipelines. While in academic settings, it requires the student to remember the relevant test files, re-execute them manually, and compare outcomes across runs. This process scales poorly with project size and provides no visual cue when a previously passing test has begun to fail.
+Code coverage analysis compounds this problem in two ways. First, coverage tools such as coverage.py produce their results in command-line tables or static HTML files that list executed and unexecuted line numbers, imposing a significant interpretive burden on beginners. Second, the coverage percentage itself is a poor proxy for test suite effectiveness. Inozemtseva and Holmes (2014) demonstrated that there is a "low to moderate correlation between coverage and effectiveness" of test suites, meaning that beginners who rely on coverage numbers as their sole quality indicator are likely to be misled about the actual fault-detection capability of their tests. Bai et al. (2021) observed this misconception in practice, reporting that students "believe code coverage is the most important outcome" of unit tests despite the evidence that coverage poorly predicts fault detection (Bai et al., 2021; Inozemtseva and Holmes, 2014). Without a structured visual representation that links coverage metrics to the corresponding source code and to the regression history of the project, students cannot develop an accurate mental model of what their tests are actually exercising.
+Aim and Objectives
+The aim of this project is to design and develop a GUI-based automated testing software specifically for Python small scale projects. It integrates unit testing, regression testing, and code coverage analysis. By providing these features, it can lower the barrier for testing adoption in academic and small-scale development contexts.
+Objectives
+To design and implement an integrated, automated testing workflow for Python applications that seamlessly supports the execution of unit tests and regression test suites, thereby reducing the configuration overhead for small-scale projects.
+To develop a Graphical User Interface (GUI) that simplifies test configuration and provides intuitive visual feedback on both test execution results and code coverage analysis, reducing the cognitive load typically associated with command-line interfaces.
+To provide an automated test case generation function that assists users in creating basic unit tests, reducing the manual effort and knowledge barrier associated with traditional test design.
+To implement and validate an end-to-end testing workflow that automates regression verification and provides interactive visual feedback for coverage interpretation, eliminating the cognitive burden of CLI outputs.
+Scope and Limitation of the Study
+Scope of Study
+Target Ecosystem
+The software is specially designed for Python small scale projects. It is utilizing native testing libraries such as pytest to ensure compatibility and ease of use.
+Functional Coverage
+The scope is strictly limited to simple test generation, unit testing and regression testing along with code coverage analysis. Other testing types like performance and security are intentionally excluded to maintain focus.
+User Interface
+The software provides a Graphical User Interface (GUI) as the primary interaction mode, prioritizing visual feedback over command-line operations.
+Target Audience
+The software is designed for academic and small-scale development in which simplicity and low configuration overhead are critical requirements.
+Operational Mode
+The software operates as a standalone desktop application, independent of external Continuous Integration servers.
+Limitation of Study
+Language Generalization
+This study is limited to Python-based projects. Therefore, the applicability of the proposed approach to other programming languages has not been explored and may require further investigation.
+Complexity of Test Generation
+This study uses Pynguin for automated test case generation. It focuses primarily on basic test scenarios. Therefore, the approach does not comprehensively address complex business logic or advanced test conditions.
+Scalability
+The system is optimized for small to medium-sized code bases. Performance on enterprise-level projects with thousands of test cases has not been extensively benchmarked due to resource constraints.
+Evaluation Context
+The system validation and workflow evaluation were conducted primarily on demo projects within an academic setting. A large-scale comparative user study with professional engineers in industrial workflows is recommended for future research to capture additional requirements.
+CI/CD Exclusion
+This study does not include integration with CI/CD pipelines. It focuses on core testing functionality in a standalone environment. Therefore, the approach has not been evaluated in full DevOps workflows.
+LITERATURE REVIEW
+Introduction
+In modern software development, automated testing tools have become an indispensable part of the development workflow. This is necessary to address increasingly complex systems and ensure software quality. Indeed, a variety of testing frameworks and utilities have been developed within the Python ecosystem. They support unit testing, regression testing, and code coverage analysis. These tools provide developers with powerful capabilities to automate test execution and evaluate the effectiveness of test cases.
+However, the practical adoption of these tools among beginners and students remains limited. Existing tools are typically designed around command-line interfaces, requiring users to manually manage configurations, dependencies, and tool integrations. Consequently, testing workflows can become fragmented, making it difficult for beginners to utilize these tools effectively. Furthermore, the lack of intuitive visual interfaces and guided interactions further reduces the usability of these tools in educational settings.
+To better understand these challenges, it is necessary to examine both the fundamental concepts of software testing and the characteristics of existing tools. This chapter will start with the theoretical foundations of unit testing, regression testing, and code coverage analysis. It then analyses the current Python testing frameworks and tools. Finally, usability considerations in software engineering are discussed.
+Concept of Unit Testing
+Unit testing is one of the software testing techniques that should be learned by major developers. This technique is used to verify the correctness of the smallest parts of the software system. The smallest parts normally can be a function, a class or a method. According to Introduction to Software Testing (2016), unit tests are designed to validate the logic of a single part of a program in isolation. 
+The unit testing has the characteristics of isolation which ensures the independence of the test case. Those tested units have been isolated from the external dependencies such as databases, file systems or other modules. This characteristic improves the reliability and repeatability of the testing.
+A fundamental aspect of unit testing is the use of assertions. Assertions are used to verify whether the actual output result is matching with the expected result. In the practical Python development, testing frameworks such as pytest use the function of assertions to determine the success or failure of  test cases. 
+Test Case Generation
+Test case is a set of input, steps and expected results developed to determine whether the function or system meets the specified requirement. Traditionally, developers manually design and create test cases. Manual test case generation relies on the experience and knowledge of developers to design the appropriate test scenarios. This led to the issue of time-consuming and human error when there are large amounts of test cases needed to be generated manually.
+Therefore, besides generating test cases manually, developers start to implement automated test case generation approaches. Automated test case generation uses algorithms and context to generate test cases. There are different techniques such as random testing, model-based testing, search-based testing and AI-assisted test generation. Automated test case generation helps to reduce the manual effort and increase the efficiency and the coverage of testing.
+Concept of Regression Testing
+Regression testing is the process of re-testing some parts of a system that has been modified. It constitutes a significant portion of testing effort in commercial software development and is considered an essential part of a reliable development process (Ammann & Offutt, 2016, p. 25). Small changes in one part of a system may introduce unexpected issues in other parts. To reduce the exposure of defects after release, the regression testing necessary to detect them.
+As software systems grow in complexity, it will take a long time to execute all test cases. Therefore, techniques such as test case selection, prioritization, and test suite minimization are commonly used to improve efficiency while maintaining adequate coverage. Manually re-running a large number of test cases is inefficient and error-prone. To address this issue, automated testing frameworks enable rapid and consistent execution of regression tests. 
+Although regression testing is often associated with CI/CD pipelines in industrial practice, it is also valuable in educational environments. For students, regression testing helps ensure that newly implemented changes do not break previously working functionalities. This is particularly important as novice programmers may lack systematic testing practices. In this project, regression testing is applied in a simplified and automated manner to support continuous validation of generated test cases.
+Code Coverage Analysis
+Code coverage analysis is a software testing metric. It used to measure the extent to which the source code of a program is executed during testing. It provides an indication of how much the system has been tested. It is identifying the parts of the code that have been exercised by test cases. The higher code coverage means the higher completeness of testing. However, this does not guarantee the absence of defects.
+Common types of code coverage include statement coverage, branch coverage, and path coverage. Statement coverage measures whether each line of code has been executed. Branch coverage evaluates whether all possible decision outcomes including the possible true or false conditions of function. Path coverage considers all possible execution paths within a program. It is rarely used for complex systems due to the exponential number of paths.
+Code coverage analysis is useful in identifying the under-tested parts of a system. By highlighting areas of low coverage, developers can improve test effectiveness by designing additional test cases to cover the remaining parts. In practical Python development, code coverage is commonly measured using automated tools such as coverage.py. These tools provide detailed reports on executed and unexecuted code segments. These tools also are often integrated into testing workflows to support continuous evaluation of test quality.
+Python Testing Ecosystem
+Nowadays, the Python programming language already has a mature ecosystem and library for manual or automated testing. These tools or frameworks support different testing needs. These tools generally support test execution frameworks, test generation libraries and code coverage analysers. In industry, these tools are widely used to make testing faster and more efficient. However, the configuration and setup are too complex and challenging for students and novice developers. 
+Text Execution Library Comparison
+Test execution library is used to define and execute the testing. The common Python libraries include unittest, nose2 and pytest. In the current practical industry, pytest is the dominant choice in practice among them. PyPI statistics show significantly higher downloads for pytest compared to nose2 (PyPI Download Stats, n.d.-a; PyPI Download Stats, n.d.-b). This disparity highlights the dominant position of pytest in practice. 
+Table 2.1:Comparison of unittest, nose2, and pytest.
+Feature
+unittest
+nose2
+pytest
+Type
+Built-in library
+Third-party extension
+Third-party framework
+Design Style
+Class-based 
+Class-based + plugins
+Function-based
+Syntax Complexity
+High
+Medium
+Low
+Boilerplate Code
+High
+Medium
+Low
+Fixture Support
+Limited
+Partial
+Strong
+Test Discovery
+Manual
+Automated
+Highly automated
+Flexibility
+Low
+Medium
+High
+Learning Curve
+Medium
+Low
+Medium
+Industry Adoption
+High (legacy)
+Low
+Very high
+Pytest provides concise syntax and flexible test structures. It supports both simple and complex testing scenarios. Pytest has its own plugin system which extends functionality effectively. Developers can manage test dependencies efficiently. Compared to unittest, it reduces boilerplate code significantly.
+Unittest is part of the Python standard library. It follows a class-based testing structure. This structure increases code verbosity. Test cases require more structural setup. However, it provides a stable and well-defined baseline. It is still widely used in legacy systems. Nose2 is a lightweight extension of unittest. It aims to simplify test discovery and execution. However, its ecosystem is less active and community adoption is relatively limited compared to pytest.
+Therefore, pytest is selected as the core testing framework in this system. 
+Test Case Generation Comparison
+Test cases can be generated either manually or through automated tools. Manual test case creation relies heavily on the experience of the developer. This is because they need to manual design and control the test logic and expected outcomes. Thus, this approach is time-consuming, prone to human error and hard to maintain the coverage of testing parts in the system.
+Table 2.2: Comparison of Test Case Generation Approaches
+Feature
+Manual
+Hypothesis
+Pynguin
+Approach
+Human-written tests
+Property-based testing
+Search-based automated generation
+Automation Level
+None
+Partial
+High
+User Effort
+High
+Moderate
+Low
+Code Modification
+Required
+Required 
+Not required
+Test Coverage
+Depends on developer
+Good with proper properties
+High (automatically explored)
+Ease of Use
+Low efficiency
+Moderate difficulty
+Beginner-friendly
+Integration
+Manual workflow
+Embedded in test code
+External tool integration
+Target Users
+Experienced developers
+Intermediate users
+Novices / Students
+Automated test case generation techniques aim to address the limitations by improving the efficiency and increasing coverage. Hypothesis and Pynguin represent two different approaches to generate the test cases automatically. Property-based testing with Hypothesis allows developers to define a range of inputs and let the library generate test cases automatically, including edge cases that might not be manually anticipated (Hypothesis, n.d.). This library required developers to well define the testing rules and constraints. This means users or the automated software have to modify or extend the existing code which may cause uncertainty for students or novice developers.
+ Next, Lukasczyk and Fraser (2022) introduced Pynguin, an extensible test generation framework designed to be easily usable by practitioners while also supporting future research through its extensible architecture. It does not require predefined properties or manual intervention during test case generation. In other words, Pynguin operates externally and does not require any modification on the original code. This characteristic makes it more suitable for my software which ensures the originality of the code.
+Code Coverage Tools
+In Python, coverage.py is commonly integrated with pytest to automatically collect execution data and generate coverage reports. These reports list out the percentage of code executed and highlight untested areas. 
+However, coverage.py presents results in command-line or static formats, which may not be intuitive for beginners. Interpreting coverage outputs often requires prior knowledge, limiting their usability in educational contexts. Thus, there is a need for a more accessible approach to presenting coverage information. This motivates the integration of coverage analysis into a graphical interface.
+Summary
+In conclusion, this chapter introduced the fundamental concepts of software testing, including unit testing, regression testing, and code coverage analysis. It also reviewed the Python testing ecosystem, focusing on the comparison of key testing frameworks and tools used for test execution, test generation, and coverage analysis.
+The analysis of unittest, pytest, and nose2 demonstrated that pytest is the most suitable framework due to its simplicity and flexibility. In addition, Pynguin was identified as a more appropriate solution for automated test generation, as it does not require modification of the original source code. Code coverage tools were also discussed as important metrics for evaluating test effectiveness, although their outputs are not always intuitive for beginners.
+Overall, existing tools are powerful but fragmented, motivating the need for an integrated testing system for improved usability.
+Table 2.3: Selected Tools and Frameworks
+Component
+Tool
+Purpose
+Reason
+Test Execution
+pytest
+Run test cases
+Simple, flexible, widely used
+Test Generation
+Pynguin
+Auto-generate tests
+Non-intrusive, fully automated
+Coverage Analysis
+coverage.py
+Measure coverage
+Standard Python tool, integrates with pytest
+METHODOLOGY AND WORK PLAN
+Introduction
+This chapter discusses the systematic approach adopted for the design and development of the software. It justifies the selected software development methodology and the breakdown of the development lifecycle. Then, the chapter also specific the hardware and software environment, outlines the Work Breakdown Structure and Gantt chart. At the last part, the potential risks will be identified and the corresponding mitigation strategies will be listed.
+Software Development Methodology
+In this software development, Iterative Development Model is selected as the methodology. Unlike linear models, iterative development divides the project into manageable cycles, each producing a functional increment that is tested, evaluated, and refined before proceeding to the next phase (Pressman & Maxim, 2020). There are three reasons that make this approach suitable for my software development.
+The Tauri v2 framework enables parallel development of the Vue frontend and Python backend through secure IPC without early-stage integration conflicts.  
+Progressive iteration allows controlled introduction of system complexity, minimizing integration bottlenecks and reducing compounding errors for a solo developer.  
+The constrained week academic timeline requires early testable deliverables, and iterative cycles guarantee a functional prototype by Week 8 for subsequent usability validation.
+Requirements Analysis and System Planning
+This phase defines the functional requirements, system boundaries, and technical specifications for the automated testing software. It ensures alignment with the objectives stated in Chapter 1 and prepares a clear roadmap for iterative development.
+Analyze problem statements to extract core functional and non-functional requirements
+Define system scope including supported Python versions, project size limits, and toolchain integration depth
+Design multi-project data isolation strategy to ensure independent configuration and history per project
+Document system architecture with Tauri-Vue frontend, Rust core logic, and Python backend interaction flows
+Establish Git repository structure with branching strategy and commit conventions for version control
+Test Execution Module
+This phase implements the core test execution capability by integrating pytest and allowing users to run tests and view results through an intuitive interface.
+Develop Rust subprocess wrapper to invoke pytest with dynamic path and parameter support
+Capture and parse structured pytest output to extract pass/fail/skip metrics for frontend display
+Add dependency detection and path validation with user-friendly error prompts for common configuration issues
+Support project context switching to load corresponding virtual environment and test configuration per project
+Automated Test Generation Module
+This phase integrates Pynguin to enable automated unit test generation  while maintaining code originality.
+Integrate Pynguin API in Rust backend
+Provide advanced control for generation feature such as generate for single module
+Display generation progress and completion status
+Coverage Analysis & Visualization Module
+This phase integrates coverage.py to collect execution data and transform coverage metrics into interactive visualizations.
+Trigger coverage.py automatically after test execution to collect statement and branch coverage data
+Parse coverage reports in Rust layer and convert to structured data format consumable by Vue components
+Enable file/function filtering to highlight uncovered code segments for targeted test supplementation
+Support export of coverage reports for sharing purposes
+Maintain per-project coverage history to track testing progress across iterative development cycles
+System Validation and Workflow Evaluation
+This phase validates the software effectiveness through end-to-end workflow benchmarking on real-world demo projects. It measures whether the GUI successfully reduces configuration overhead and meets the non-functional requirements.
+Execute a complete testing workflow (import → generate → execute → coverage) on a target Python project.
+Record workflow completion time, error frequency, and system responsiveness to verify compliance with NFR001 and NFR003 .
+Verify all 13 Functional Requirements through systematic testing of the GUI, subprocess integration, and coverage visualization.
+Analyze the generated test metrics such as code coverage improvement to validate the effectiveness of the automated generation module.
+Documentation and Packaging
+This phase prepares the final deliverables including cross-platform installers, user documentation, and project archival to ensure reproducibility and successful submission.
+Generate installers using Tauri builder for deployment targets
+Compile user manual covering installation, configuration, usage workflows, and troubleshooting guidance
+Clean source code, add inline documentation, and tag final release in remote repository for archival
+Development Tools and Environment
+This section lists out the hardware, software, and technical dependencies required for developing and running the software. The environment is configured to support desktop deployment while maintaining compatibility with Python-based testing workflows.
+Hardware Specifications
+Operating System: Windows 11 Home Single Language
+Processor: AMD Ryzen 7 5800H with Radeon Graphics (3.20 GHz)
+RAM: 16 GB
+Storage: 500 GB SSD
+Software and Frameworks
+Software Framework: Tauri v2
+Frontend Framework: Vue 3 + Vite
+Backend Runtime: Rust
+Python Runtime: Python 3.10+
+Testing Libraries: pytest, Pynguin, coverage.py
+IDE: VS Code
+Version Control: Git + GitHub
+Package Manager: pnpm, Cargo, pip
+Environment Management: venv
+Work Breakdown Structure (WBS)
+1.0 Requirements Analysis and System Planning
+1.1 Analyze problem statements to extract functional and non-functional requirements
+1.2 Define system scope 
+1.3 Design multi-project data isolation strategy
+1.4 Document system architecture
+1.5 Establish Git repository
+2.0 Test Execution Module
+2.1 Develop Rust subprocess wrapper to invoke pytest
+2.2 Capture and parse structured pytest output
+2.3 Implement dependency detection and path validation with error prompts
+2.4 Support project context switching and virtual environment loading
+3.0 Automated Test Generation Module
+3.1 Integrate Pynguin API in Rust backend
+3.2 Implement advanced control
+3.3 Develop UI for generation progress & completion status display
+4.0 Coverage Analysis & Visualization Module
+4.1 Trigger coverage.py post-execution for statement/branch data
+4.2 Parse reports in Rust and convert to Vue-consumable format
+4.3 Implement file or function filtering for uncovered code segments
+4.4 Enable coverage report export and per-project history tracking
+5.0 System Validation and Workflow Evaluation
+5.1 Execute end-to-end workflow on demo projects 
+5.2 Record completion time and verify NFR compliance 
+5.3 Verify all 13 Functional Requirements 
+5.4 Analyze generated test metrics and coverage improvement 
+6.0 Documentation and Packaging
+6.1 Generate installers using Tauri builder
+6.2 Compile user manual 
+6.3 Clean source code, add inline documentation, tag final release
+Gantt Chart
+Figure 3.1:Gantt Chart.
+Risk Management and Mitigation
+This section identifies the potential risks that may affect project development and outlines mitigation strategies to minimize their impact.
+Table 3.1: Risk Management and Mitigation
+Risk
+Probability
+Impact
+Mitigation Strategy
+Python interpreter path or virtual environment detection fails
+Medium
+High
+Implement auto-detection with manual override and user guide instructions
+Pynguin fails to generate tests for complex code structures
+Medium
+High
+Scope limitation with warning display and suggestion to reduce target scope
+Tauri IPC communication causes performance bottleneck or UI freezing
+Medium
+Medium
+Async commands with incremental log streaming to frontend
+Dependency version conflicts between pytest, Pynguin, and coverage.py
+Low
+High
+Pin dependency versions in requirements.txt and use isolated virtual environments for testing
+Tauri security policies restrict necessary file system or process access
+Low
+Medium
+Minimal allowlist configuration and path validation before execution
+Feature scope creep
+Medium
+Medium
+Phase 1 feature freeze with backlog for future iterations
+Cross-platform build issues
+Low
+Low
+Focus development on Windows and defer macOS or Linux support to post-FYP iteration
+Summary
+This chapter outlined the methodology and work plan for developing the automated testing software. An iterative approach was adopted and structured into six functional phases which are requirements analysis, test execution module, automated test generation, coverage analysis, usability evaluation, and final delivery. A Work Breakdown Structure and Gantt chart were defined to track progress across the timeline. Lastly, the risk management table lists out the potential risk with corresponding mitigation strategies.
+PROJECT SPECIFICATION
+Introduction
+Based on the requirements analysis and development plan presented in Chapter 3, this chapter defines the detailed specifications and design of the proposed automated testing software. The purpose of this chapter is to establish a clear blueprint for system implementation and to ensure that all software components are developed in accordance with the project objectives and user requirements.
+This chapter presents the functional and non-functional requirements, overall use cases. It also describes the system actors, use case model and user interface design. These specifications provide a structured representation of the system behaviour, workflow, and design decisions, serving as a foundation for the implementation phase and subsequent system evaluation.
+System Requirements
+This section defines the system requirements for the proposed automated testing software. The system requirements are categorized into functional and non-functional requirements. Functional requirements describe the core features and operations that the system must support, including test execution, automated test generation, and code coverage analysis. Non-functional requirements define the quality attributes of the system, such as usability, performance, and maintainability.
+Together, these requirements ensure that the system is able to provide a consistent, efficient, and user-friendly testing environment for Python-based projects, particularly for students and novice developers.
+Functional Requirements
+Table 4.1: Functional Requirements
+
+=== PAGE BREAK ===
+
+ID
+Description
+
+=== PAGE BREAK ===
+
+Project Management Module
+FR001
+The user shall be able to select and import a local Python project directory into the software.
+
+=== PAGE BREAK ===
+
+FR002
+The system shall automatically detect the Python virtual environment of the project upon import.
+
+=== PAGE BREAK ===
+
+FR003
+The system shall check for required dependencies and prompt the user to install them if they are missing.
+
+=== PAGE BREAK ===
+
+Text Execution Module
+FR004
+The user shall be able to select specific test files, folders and execute them.
+FR005
+The system shall stream real-time execution logs to the frontend interface during test execution.
+FR006
+The system shall parse the test results and display a visual summary of passed, failed, and skipped test cases.
+FR007
+The user shall be able to save specific test execution parameters as a regression suite for future one-click execution.
+Test Generation Module
+FR008
+The user shall be able to select a target Python module or class to trigger automated unit test generation.
+FR009
+The system shall output the generated test code into the project's test directory without modifying the original source code.
+FR010
+The user shall be able to configure advanced generation settings, such as time limits and target functions.
+Coverage Analysis Module
+FR011
+The system shall automatically trigger the coverage tool immediately after a successful test execution to collect data.
+FR012
+The system shall display the overall coverage percentage and highlight executed and uncovered lines of code in the code viewer.
+FR013
+The user shall be able to filter coverage metrics by file or function, and export the coverage report as a standalone file.
+Non-Functional Requirements
+Table 4.2: Non-Functional Requirements
+NFR ID
+Description
+Usability
+NFR001
+A novice user shall be able to complete their first end-to-end testing workflow within 15 minutes without referring to external documentation.
+NFR002
+The system shall convert 100% of common dependency and path errors into user-friendly messages with suggested corrective actions instead of displaying raw terminal logs.
+Performance
+NFR003
+The system shall maintain UI responsiveness with a blocking time of less than 100 ms and stream execution logs with a latency of less than 500 ms.
+NFR004
+The application's memory usage shall not exceed 500 MB RAM under normal operation with a medium-sized project loaded.
+NFR005
+The system shall generate an executable baseline unit test suite for a Python module of up to 200 lines of code within 60 seconds of user initiation.
+Compatibility
+NFR006
+The system shall provide a stable standalone installer for Windows 10/11 (64-bit) through Tauri.
+NFR007
+The system shall be fully compatible with Python 3.10, 3.11, and 3.12 for test execution and generation.
+Maintainability
+NFR008
+All communication between the Vue frontend and Rust/Python backend shall occur through strictly typed Tauri IPC commands, with no direct backend state manipulation.
+Use Case
+Actors Identification
+Table 4.3: Actors Identification
+
+=== PAGE BREAK ===
+
+Actor Type
+
+=== PAGE BREAK ===
+
+Actor Name
+
+=== PAGE BREAK ===
+
+Description
+
+=== PAGE BREAK ===
+
+Primary
+
+=== PAGE BREAK ===
+
+User (Student/Novice Developer)
+
+=== PAGE BREAK ===
+
+Initiates all main workflows via the GUI.
+
+=== PAGE BREAK ===
+
+Secondary
+
+=== PAGE BREAK ===
+
+Python Execution Libraries
+
+=== PAGE BREAK ===
+
+Represents the isolated Python subprocess invoked by the Rust backend.
+Use-Case Diagram
+Figure 4.1: Use-Case Diagram of the Automated Testing Software.
+Use-Case 1: Setup Project Environment
+Table 4.4: Use-Case Description of the Setup Project Environment
+
+=== PAGE BREAK ===
+
+Name: Setup Project Environment
+ID: UC01
+
+=== PAGE BREAK ===
+
+Importance Level: High 
+
+=== PAGE BREAK ===
+
+Primary Actor: User (Student / Novice Developer)
+
+=== PAGE BREAK ===
+
+Secondary Actor: Python Execution Environment
+
+=== PAGE BREAK ===
+
+Use Case Type: Detailed, Essential 
+Stakeholders and Interests:
+User (Student/Novice) – Wants to seamlessly import their local Python project and ensure the testing environment is correctly configured without dealing with complex command-line setups.
+Python Execution Environment – Needs to have the required dependencies installed in the virtual environment to execute future testing and generation tasks.
+
+=== PAGE BREAK ===
+
+Brief Description:
+
+=== PAGE BREAK ===
+
+This use case describes how a user imports a local Python project directory into the automated testing software. The system automatically detects the Python virtual environment, checks for required testing dependencies, and initializes the project's local storage. It ensures the environment is fully prepared and validated for subsequent test execution and code generation tasks. 
+Trigger:
+
+=== PAGE BREAK ===
+
+The user clicks the "Import Project" button and selects a local Python project directory via the Graphical User Interface. 
+Relationships:
+Association: User, Python Execution Environment
+Include: N/A
+Extend: Install Missing Dependencies
+Generalization: N/A
+Normal Flow of Events:
+The user selects a local Python project directory through the GUI to initiate the import process.
+The Vue frontend sends an IPC command to the Rust backend to validate the selected directory.
+The Rust backend scans the directory to detect the Python interpreter and the associated virtual environment. Perform 3.1 or 3.2.
+The system checks the virtual environment for required testing dependencies. Perform 4.1 or 4.2.
+The system initializes a dedicated persistence layer in the local storage for this specific project.
+The system returns a "ready-to-test" configuration status to the frontend.
+The UI updates to display the successful environment setup, and the use case ends.
+Sub-flows:
+3.1 If the system successfully detects a valid Python interpreter and virtual environment, continue to flow no. 4.
+3.2 If the system fails to detect the environment automatically, proceed to Alternate Flow 3.2.
+4.1 If all required dependencies are present in the virtual environment, continue to flow no. 5.
+4.2 If one or more dependencies are missing, proceed to Alternate Flow 4.2.
+Alternate/Exceptional Flows:
+3.2 Manual Override for Interpreter Path:
+The system displays a user-friendly error prompt explaining the detection failure, avoiding raw terminal logs.
+The system provides an interface for the user to manually input the correct Python interpreter path.
+The user provides the path, and the system re-validates it via the Rust backend.
+If valid, return to Normal Flow no. 4. If invalid, repeat step 2 or terminate the use case.
+4.2 Install Missing Dependencies:
+The system pauses the setup and prompts the user via the GUI, listing the missing packages.
+The user confirms and authorizes the system to install the missing dependencies.
+The Rust backend invokes the Python Execution Environment to execute the installation command.
+Upon successful installation, return to Normal Flow no. 5. If the installation fails, the system displays an error message and terminates the use case.
+Use-Case 2: Execute Tests and View Results
+Table 4.5: Use-Case Description of Execute Tests and View Results
+Name: Execute Tests and View Results
+ID: UC02
+Importance Level: High 
+Primary Actor: User (Student / Novice Developer)
+Secondary Actor: Python Execution Environment
+Use Case Type: Detailed, Essential 
+Stakeholders and Interests:
+User (Student/Novice) – Wants to run tests easily, monitor real-time progress without the application freezing, and understand the results visually without needing to parse complex command-line logs. 
+Python Execution Environment – Needs to execute the targeted test cases and output execution logs and metrics via standard output streams.
+Brief Description:
+This use case describes how a user selects specific test files or folders and executes them. The system runs the tests via a Python subprocess, incrementally streams real-time logs to the GUI, and displays a visual summary of the results. Upon completion, it automatically triggers code coverage data collection and provides an optional workflow for users to save their execution parameters as a regression suite for future use. 
+Trigger:
+The user selects a test file or folder from the project directory and clicks the "Run Tests" button in the Graphical User Interface. 
+Relationships:
+Association: User, Python Execution Environment
+Include: Collect Coverage Data
+Extend: Save as Regression Suite
+Generalization: N/A
+Normal Flow of Events:
+The user selects a specific test file or folder from the project directory via the GUI.  
+The user initiates the test execution process.  
+The Vue frontend sends an IPC command to the Rust backend to start the test execution.  
+The Rust backend spawns a Python subprocess invoking the test library with the selected target paths.  
+The Rust backend incrementally reads the standard output stream of the subprocess asynchronously.  
+The system parses the real-time logs and streams structured updates to the Vue frontend via the event emission system.  
+The UI continuously updates the progress indicator and displays real-time execution logs.  
+Upon subprocess completion, the system parses the final aggregated test results.  
+The system displays a visual summary of passed, failed, and skipped test cases on the dashboard. Perform 9.1 or continue to 10.  
+The system automatically triggers the coverage library in a new subprocess to collect statement and branch coverage data.  
+The use case ends successfully, and the coverage data is cached for the Analysis module.
+Sub-flows:
+6.1 If the log parsing and event emission are successful, continue to flow no. 7.  
+9.1 If the user chooses to save the current execution parameters as a regression suite, proceed to Alternate Flow 9.1.  
+10.1 If the coverage subprocess is successfully triggered and completes, the parsed JSON metrics are cached in local storage, and the use case concludes.
+Alternate/Exceptional Flows:
+4.1 Subprocess Spawning or IPC Fails:  
+The Rust backend fails to spawn the Python subprocess or encounters an IPC communication bottleneck.  
+The system catches the exception and converts the raw terminal error into a user-friendly message with suggested corrective actions.  
+The system displays the error prompt on the UI, ensuring the interface remains responsive, and terminates the use case.
+8.1 Test Execution Contains Failures or Errors:  
+The pytest process completes, but one or more test cases fail or encounter runtime errors. 
+The system parses the specific failure logs.
+The system highlights the failed test cases in the visual summary. 
+The system displays user-friendly error traces instead of raw terminal dumps.
+The use case resumes at flow no. 10.
+9.1 Save as Regression Suite:
+The user selects the option to save the current test execution configuration.
+The system prompts the user to input a name for the regression suite.
+The user inputs a name and confirms.  
+The Rust backend persists the configuration in the local storage for future one-click execution.  
+The system displays a success notification, and the use case resumes at flow no. 10.
+Use-Case 3: Generate Unit Tests
+Table 4.6: Use-Case Description of Generate Unit Tests
+Name: Generate Unit Tests
+ID: UC03
+Importance Level: High 
+Primary Actor: User (Student / Novice Developer)
+Secondary Actor: Python Execution Environment
+Use Case Type: Detailed, Essential 
+Stakeholders and Interests:
+User (Student/Novice) – Wants to automatically generate baseline unit tests for a specific module without needing deep testing knowledge, and wants to see the generation progress in real-time without the application freezing.
+Python Execution Environment – Needs to analyze the target code and generate test cases based on search-based algorithms within the configured time limits, operating externally to ensure code originality.
+Brief Description:
+This use case describes how a user selects a target Python module or class and configures advanced settings to trigger automated unit test generation. The system invokes the Pynguin engine in an isolated subprocess, streams the generation progress to the GUI in real-time, and safely outputs the generated test code into the project's test directory without modifying the original source code.
+Trigger:
+The user selects a target Python module or class from the project directory and clicks the "Generate Tests" button in the Graphical User Interface. 
+Relationships:
+Association: User, Python Execution Environment
+Include: N/A
+Extend: N/A
+Generalization: N/A
+Normal Flow of Events:
+The user selects a target Python module or class from the project directory via the GUI.
+The user configures advanced generation settings, such as time limits and target functions.
+The user initiates the automated test generation process.
+The Vue frontend sends an IPC command to the Rust backend with the target path and configuration parameters.
+The Rust backend spawns an isolated Python subprocess invoking the Pynguin engine.
+The Rust backend asynchronously reads the standard output stream from the Pynguin subprocess.
+The system parses the real-time progress logs and streams structured updates to the Vue frontend via the event emission system.
+The UI continuously updates the generation progress indicator without freezing.
+Upon successful completion within the specified time limit, the Rust backend safely writes the generated test files into the project's designated test directory without modifying the original source code.
+The system emits a success event to the frontend, displaying a notification containing the generated file path, and the use case ends.
+Sub-flows:
+7.1 If the log parsing and event emission are successful, continue to flow no. 8.
+9.1 If the file writing operation is successful and safely avoids overwriting existing user-written tests, continue to flow no. 10.
+Alternate/Exceptional Flows:
+5.1 Subprocess Spawning Fails:  
+The Rust backend fails to spawn the Python subprocess or locate the Pynguin library in the virtual environment.
+The system catches the exception and displays a user-friendly error message suggesting the user check the dependency installation, avoiding raw terminal logs.
+The use case terminates.
+9.2 Pynguin Fails to Generate Tests or Times Out:  
+The Pynguin process completes but fails to generate any tests, or it exceeds the configured time limit.
+The system catches the timeout or empty output exception.
+The system displays a warning message explaining that the code structure might be too complex for automated generation.
+The use case terminates gracefully without crashing or freezing the UI.
+Use-Case 4: Analyze Code Coverage
+Table 4.7: Use-Case Description of Analyze Code Coverage
+Name: Analyze Code Coverage
+ID: UC04
+Importance Level: High 
+Primary Actor: User (Student / Novice Developer)
+Secondary Actor: Local Storage
+Use Case Type: Detailed, Essential 
+Stakeholders and Interests:
+User (Student/Novice) – Wants to visually understand which parts of their code are tested and which are not, without needing to read or interpret raw terminal coverage reports. Wants to filter specific functions and export the data for academic or project reporting.
+System (Rust Backend and Vue Frontend) – Needs to efficiently retrieve, parse, and render cached coverage metrics without freezing the UI, especially when dealing with large source code files.
+Brief Description:
+This use case describes how a user views and interacts with the code coverage results that were automatically collected after test execution. The system displays an interactive code viewer that highlights covered and uncovered lines, allows the user to filter metrics by file or function, and supports exporting the coverage report as a standalone file for external sharing.
+Trigger:
+The user navigates to the "Coverage Analysis" tab or clicks on the coverage summary widget on the dashboard after a successful test execution. 
+Relationships:
+Association: User, Local Storage
+Include: N/A
+Extend: N/A
+Generalization: N/A
+Normal Flow of Events:
+The user navigates to the Coverage Analysis module via the GUI.  
+The Vue frontend sends an IPC command to the Rust backend to request the latest coverage data.  
+The Rust backend retrieves the structured JSON coverage metrics from the local storage. Perform 3.1 or 3.2.  
+The system calculates and displays the overall statement and branch coverage percentages on the dashboard.  
+The user applies filters to view specific files or functions.  
+The system renders an interactive code viewer for the selected target, dynamically highlighting the executed and unexecuted lines of code with distinct visual indicators  
+The use case ends successfully, leaving the user in an interactive state to review the code.
+Sub-flows:
+3.1 If the cached JSON data is successfully retrieved and validated, continue to flow no. 4.
+3.2 If no valid coverage cache is found for the current project state, proceed to Alternate Flow 3.2.
+6.1 If the code rendering and syntax highlighting are completed while maintaining UI responsiveness, continue to flow no. 7.
+Alternate/Exceptional Flows:
+3.2 No Coverage Data Available:
+The Rust backend finds no valid coverage cache.
+The system displays a user-friendly prompt informing the user that coverage data is currently unavailable.
+The system provides a quick-action button to redirect the user to the Test Execution module.
+The use case terminates.
+7.1 Export Coverage Report:
+The user clicks the "Export Report" button on the coverage dashboard.
+The system prompts the user to select a destination folder and choose the export format.
+The user confirms the selection.
+The Rust backend generates the standalone report file using the cached metrics and saves it to the local file system.
+The system displays a success notification containing the exported file path, and the use case resumes at flow no. 7.
+Activity Diagrams
+Figure 4.2: Activity Diagram of the Setup Project Environment.
+Figure 4.3: Activity Diagram of the Execute Tests.
+Figure 4.4: Activity Diagram of the View Test Results.
+Figure 4.5: Activity Diagram of the Generate Unit Tests.
+Figure 4.6: Activity Diagram of the Analyze Code Coverage.
+Sequences Diagrams
+Figure 4.7: Sequence Diagram of the Setup Project Environment.
+Figure 4.8: Sequence Diagram of the Execute Tests.
+Figure 4.9: Sequence Diagram of the View Test Results.
+Figure 4.10: Sequence Diagram of the Generate Unit Tests.
+Figure 4.11: Sequence Diagram of the Analyze Code Coverage.
+SYSTEM DESIGN
+High-Level Architecture Design
+This section outlines the core technologies adopted in the proposed system and illustrates their integration to form a cohesive software architecture. As illustrated in Figure 4.1, the system is decoupled into three primary runtime environments, unified by the Tauri v2 framework.
+Tauri v2 serves as the foundational framework that unifies the entire application stack. It provides a bridge between the frontend and the backend. The core feature of Tauri framework is to allow us to build lightweight, ultra-fast, and highly secure applications by combining modern website frontend technologies with a Rust backend.
+Vue 3 framework serves as the graphical user interface. It provides an interactive dashboard for project management and test-related features. This layer is responsible solely for UI rendering and user interaction handling. All business logic and heavy computation are offloaded to the backend.
+Rust serves as the central system of the application. Built with Tauri v2, Rust exposes a secure, type-safe IPC interface to the frontend. This layer is responsible for all business logic and system orchestration. It receives IPC commands from the frontend and manages the full application lifecycle. It also manages local caching, project state, and file system interactions.
+Python serves as the isolated execution engine. It leverages the libraries for test execution, metrics collection, and automated test generation. It does not run as a persistent service. The Rust backend starts Python subprocesses on demand and communicates through standard input and output. This design reduces resource usage and isolates execution. It also ensures clean process termination after each task.
+The persistence component manages all long-term data retention, including project configurations, test execution history, coverage caches, and user settings. By abstracting data storage into a dedicated component, the system ensures that the core orchestration logic remains agnostic to the underlying storage mechanism. Therefore, it can enhance the maintainability and extensibility.
+Figure 5.1: High-Level Architecture of the Automated Testing Software.
+Component Interaction
+This section details the dynamic collaboration between the core system components during the primary workflow. As the software targets students and novice developers, the interaction flow is designed to minimize manual configuration and provide continuous visual feedback. The system relies on an asynchronous, event-driven communication pattern to ensure UI responsiveness across all operations. The component interaction is formed by four phases that represent the complete user journey which are Test Environment Setup, Automated Test Generation, Test Execution, and Coverage Analysis. 
+Test Environment Setup
+Figure 5.2: Sequence Diagram of the Environment Setup.
+Upon project import, the Vue frontend sends an Inter-Process Communication (IPC) command to the Rust backend to validate the selected directory. The Rust core scans for the Python interpreter and virtual environment to verify the availability of required dependencies. Then, it initializes a dedicated persistence layer in local storage. The configuration status is then returned to the UI, prompting the user to install missing dependencies if necessary, or confirming a ready-to-test state.
+Automated Test Generation
+Figure 5.3: Sequence Diagram of the Automated Test Generation.
+When the user selects a target Python module and initiates generation, the Rust backend invokes Pynguin library. The generation progress is streamed asynchronously to the UI via event-driven updates. Upon completion, the generated test files are safely written to the test directory by the Rust backend. The success notification containing the file path is displayed on the frontend which requires zero manual file handling from the user.
+Test Execution
+Figure 5.4: Sequence Diagram of the Test Execution.
+When the user triggers test execution, the Rust backend spawns a Python subprocess invoking pytest library. Crucially, instead of adopting a synchronous blocking model, the Rust backend incrementally reads the standard output stream. It parses each line of execution logs in real-time and pushes structured updates to the Vue frontend via event emission system. This asynchronous design guarantees the UI to update the progress indicator and test dashboard continuously without freezing.
+Automated Coverage Analysis
+Figure 5.5: Sequence Diagram of the Automated Coverage Analysis.
+After a successful test execution, the Rust backend automatically triggers coverage.py library in subprocess to collect statement and branch coverage data. The raw coverage output is parsed into a structured JSON format by the Rust layer and cached in the local storage. A coverage-ready event is then emitted to the frontend, which renders an interactive code viewer, highlighting covered and uncovered lines based on the parsed metrics, thereby closing the feedback loop for the user.
+Database and Data Storage Design
+To implement the long-term data retention, the persistence layer utilizes a hybrid storage approach. Structured metadata such as projects, execution history, and regression suites, is managed via an embedded SQLite database integrated into the Tauri. Heavy or unstructured historical data, such as raw code coverage metrics parsed from coverage.py,  are stored as serialized JSON files in the system local application data directory to maintain UI responsiveness and high performance.
+Multi-Project Data Isolation Strategy
+The strict data isolation strategy is enforced to prevent historical test metrics and virtual environment configurations from overlapping between different local Python projects. Each imported project is assigned a unique Snowflake ID. The system creates isolated subdirectories within the application data folder.
+Entity-Relationship Diagram
+The Project table stores metadata for imported local projects. The Test Execution History table saves pass-rate statistics from each executed test. The Regression Suite table holds user-saved execution parameters for one-click reruns. Lastly, the Coverage Results table stores overall coverage metrics while mapping them to the specific local JSON cache files.
+Figure 5.6: Entity-Relationship Diagram.
+Entity Relationship Logic Description:
+A Project has a one-to-many relationship with TestExecutionHistory, meaning one project can have multiple test execution records.
+A Project has a one-to-many relationship with RegressionSuite, meaning one project can contain multiple regression suites.
+A RegressionSuite has a one-to-many relationship with TestExecutionHistory, meaning one regression suite can generate multiple execution histories.
+A TestExecutionHistory has a one-to-zero-or-one relationship with CoverageResults, meaning one test execution may generate zero or one coverage result.
+Data Dictionary
+Table 5.1: Projects Table Structure.
+Field
+Data Type
+Constraints
+Description
+id
+INTEGER
+PRIMARY KEY
+Unique Snowflake identifier.
+name
+VARCHAR(255)
+NOT NULL
+User-defined project name or detected folder name.
+project_path
+TEXT
+NOT NULL
+Absolute local file system path of the Python project.
+interpreter_path
+TEXT
+NULL
+Path of the detected or manually configured Python virtual environment interpreter.
+status
+VARCHAR(20)
+DEFAULT 'active'
+Current project availability status ( active, missing, invalid).
+created_at
+TIMESTAMP
+DEFAULT CURRENT_TIMESTAMP
+Timestamp when the project was imported into the system.
+last_opened_at
+TIMESTAMP
+NULL
+Latest timestamp when the user accessed the project.
+Table 5.2: Text Execution History Table Structure.
+Field
+Data Type
+Constraints
+Description
+id
+INTEGER
+PRIMARY KEY 
+Unique Snowflake identifier.
+project_id
+INTEGER
+FOREIGN KEY projects(id)
+Identifies the project associated with this test execution.
+regression_suite_id
+INTEGER
+FOREIGN KEY regression_suites(id), NULL
+Identifies the regression suite used. Null if manually triggered.
+execution_type
+VARCHAR(20)
+NOT NULL
+Defines the execution source (MANUAL or REGRESSION).
+execution_status
+VARCHAR(20)
+NOT NULL
+Final execution status ( SUCCESS, FAILED, ERROR, TIMEOUT).
+command
+TEXT
+NULL
+pytest command executed
+total_tests
+INTEGER
+NOT NULL
+Total number of detected and executed test cases.
+passed
+INTEGER
+NOT NULL
+Number of successfully passed test cases.
+failed
+INTEGER
+NOT NULL
+Number of failed test cases.
+skipped
+INTEGER
+NOT NULL
+Number of skipped test cases.
+execution_time
+REAL
+NOT NULL
+Total execution duration in seconds.
+executed_at
+TIMESTAMP
+DEFAULT CURRENT_TIMESTAMP
+Date and time when the test execution started.
+Table 5.3: Regression Suits Table Structure.
+Field
+Data Type
+Constraints
+Description
+id
+INTEGER
+PRIMARY KEY 
+Unique Snowflake identifier for each saved regression suite.
+project_id
+INTEGER
+FOREIGN KEY REFERENCES projects(id)
+Associates the regression suite with a specific Python project.
+suite_name
+VARCHAR(100)
+NOT NULL
+User-defined name of the regression suite (e.g., "Critical Authentication Suite").
+target_paths
+TEXT
+NOT NULL
+JSON-formatted array containing selected test files or folders to execute.
+custom_params
+TEXT
+NULL
+Additional pytest arguments or execution parameters saved by the user.
+created_at
+TIMESTAMP
+DEFAULT CURRENT_TIMESTAMP
+Timestamp when the regression suite was created.
+updated_at
+TIMESTAMP
+DEFAULT CURRENT_TIMESTAMP
+Timestamp when the regression suite was last modified.
+Table 5.4: Coverage Results Table Structure.
+Field Name
+Data Type
+Constraints
+Description
+id
+INTEGER
+PRIMARY KEY AUTOINCREMENT
+Unique identifier for each coverage result record.
+execution_id
+INTEGER
+UNIQUE, FOREIGN KEY test_execution_history(id)
+Associates coverage information with a specific test execution event.
+statement_coverage
+REAL
+NOT NULL
+Overall statement coverage percentage calculated from the executed tests.
+branch_coverage
+REAL
+NOT NULL
+Overall branch coverage percentage calculated from the executed tests.
+cache_file_path
+TEXT
+NOT NULL
+Local path pointing to the JSON file containing detailed line-level coverage information.
+file_format
+VARCHAR(20)
+DEFAULT 'JSON'
+Format of the stored coverage report file.
+generated_at
+TIMESTAMP
+DEFAULT CURRENT_TIMESTAMP
+Timestamp when the coverage result was generated.
+Prototype User Interface Design
+Project Management Dashboard
+Figure 5.6: Project Management Dashboard Prototype Design.
+This interface serves as the central workspace where users can manage imported projects, review testing status, and access important project information before executing automated testing tasks. The dashboard is divided into three main sections which are navigation area, project management area, and status bar area.
+The left navigation area provides quick access to the major functions of the system. The "Import Project" function allows users to add a local Python project into the system. The "Clone Repository" function enables users to retrieve projects from remote Git repositories. Additionally, the "AI Test Generator" option provides access to the automated test generation feature supported by Pynguin. The resource section contains supporting features such as documentation, issue reporting, and system settings.
+The main area displays a list of available projects managed by the system. Each project is presented with necessary testing information such as project name, environment status, latest test results, test coverage, and the most recent execution time.
+The Environment column provides users status of the project environment. An overview of the execution environment, such as the Python version, virtual environment status, and dependency availability. This helps users identify configuration problems before running tests.
+The Last Test Result column summarizes the outcome of the latest testing execution by showing the number of passed and failed test cases. This allows users to quickly evaluate the current quality status of each project.
+The Coverage column presents the test coverage percentage using a visual progress indicator. This provides users with an immediate understanding of how much of the source code has been tested.
+The bottom status bar area provides global system information. It displays the currently detected Python version, total number of registered projects, and the total number of testing executions performed by the system. This helps users understand the current software environment and overall system usage.
+Project Management Dashboard
+REFERENCES
+Ammann, P. and Offutt, J., 2016. Introduction to Software Testing. 2nd ed. Cambridge: Cambridge University Press.
+Bai, G. R., Smith, J., & Stolee, K. T. (2021). How students unit test: Perceptions, practices, and pitfalls. In Proceedings of the 26th ACM Conference on Innovation and Technology in Computer Science Education V. 1 (ITiCSE '21), pp. 248-254. ACM. https://doi.org/10.1145/3430665.3456368
+Fraser, G., & Arcuri, A. (2013). Whole test suite generation. IEEE Transactions on Software Engineering, 39(2), 276-291.
+Hypothesis. (n.d.). Welcome to Hypothesis! Retrieved April 12, 2026, from https://hypothesis.readthedocs.io/en/latest/
+Inozemtseva, L., & Holmes, R. (2014). Coverage is not strongly correlated with test suite effectiveness: A theoretical and empirical study. In Proceedings of the 36th International Conference on Software Engineering (ICSE 2014), pp. 321-330.
+Lukasczyk, S., & Fraser, G. (2022). Pynguin. Proceedings of the ACM/IEEE 44th International Conference on Software Engineering: Companion Proceedings. https://doi.org/10.1145/3510454.3516829
+Pressman, R. S., & Maxim, B. R. (2020). Software Engineering: A Practitioner's Approach (9th ed.). New York, NY: McGraw-Hill Education.
+PyPI Download Stats. (n.d.-a). Retrieved April 7, 2026, from https://pypistats.org/packages/pytest
+PyPI Download Stats. (n.d.-b). Retrieved April 7, 2026, from https://pypistats.org/packages/nose2
+Rafique, Y., & Mišić, V. B. (2013). The effects of test-driven development on external quality and productivity: A meta-analysis. IEEE Transactions on Software Engineering, 39(6), 835–856.
+Showler, A., Miljanovic, M., & Bradbury, J. (2025). How effective and efficient are student-written software tests? In Proceedings of the SIGCSE Technical Symposium 2025.
+‌
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===
+
+
+=== PAGE BREAK ===

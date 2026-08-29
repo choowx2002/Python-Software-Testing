@@ -1,0 +1,40 @@
+@startuml
+title Figure 4.6: Activity Diagram of the Analyze Code Coverage.
+start
+if (Entry point?) then (Manual tab)
+  :Open Coverage view;
+else (From Execute post-run modal)
+  :autoRun=1 -> auto select source files;
+endif
+
+:check_coverage_installed(interpreter);
+if (coverage.py installed?) then (no)
+  :install_dependencies(["coverage"]);
+else (yes)
+endif
+
+:Select source files / test files;
+:run_coverage(projectId, path, interpreter, testFiles, sourceDirs);
+:coverage erase -> coverage run --branch --source=<root> --omit=...\n-m pytest -> coverage json -o <app_data>/<projectId>/coverage.json;
+:Parse coverage JSON (format 1 / 2);
+:Emit coverage-finished {summary};
+:Render summary cards\n(statement % and branch %);
+
+if (User selects a file?) then (yes)
+  :get_coverage_detail(filePath);
+  :Render code viewer\nfour-state highlight (covered / missing / excluded / not-executable);
+  if (Function filter?) then (yes)
+    :Filter by function\n(regex extraction of def / class methods);
+  else (no)
+  endif
+else (no)
+endif
+
+if (User exports?) then (yes)
+  :export_coverage_report(format = json | csv)\nsave dialog -> write file;
+else (no)
+endif
+
+:Save coverage result\n(save_coverage_result + save_coverage_history);
+stop
+@enduml
