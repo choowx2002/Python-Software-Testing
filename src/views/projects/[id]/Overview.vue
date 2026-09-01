@@ -5,11 +5,12 @@
  *  - 数据卡片：覆盖率、最近测试结果、环境
  *  - 新手三步工作流引导：生成 → 执行 → 覆盖率（带跳转 CTA）
  */
-import { computed, ref, watch } from "vue";
+import { computed, ref, watch, onBeforeUnmount } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useI18n } from "vue-i18n";
-import { Gauge, Loader2, Play, WandSparkles } from "@lucide/vue";
+import { Download, Gauge, Loader2, Play, WandSparkles, Wrench } from "@lucide/vue";
 import { useProjectStore } from "../../../stores/projectStore";
 import AppCard from "../../../components/ui/AppCard.vue";
 import AppButton from "../../../components/ui/AppButton.vue";
@@ -92,6 +93,95 @@ const envStatusLabel = computed(() => {
       return t("overview.noEnv");
   }
 });
+
+/* ------------------------------------------------------------------ */
+/* 环境修复：无 venv 时用检测到的解释器重建，再按需装依赖                 */
+/* ------------------------------------------------------------------ */
+const envFixing = ref(false);
+const envFixError = ref<string | null>(null);
+const envFixNote = ref<string | null>(null);
+let unlistenInstall: UnlistenFn | undefined;
+
+/** 订阅 pip 安装进度（install_step 事件），仅用于沉浸式提示 */
+async function subscribeInstallStep() {
+  unlistenInstall?.();
+  unlistenInstall = await listen<{ package: string; status: string }>(
+    "install_step",
+    (event) => {
+      const { package: pkg, status } = event.payload;
+      if (status === "starting") {
+        envFixNote.value = t("overview.installing", { package: pkg });
+      } else if (status === "success") {
+        envFixNote.value = null;
+      }
+    },
+  );
+}
+
+onBeforeUnmount(() => {
+  unlistenInstall?.();
+});
+
+/** 重建虚拟环境（用检测到的 Python），随后补装缺失依赖，最后重新探测 */
+async function createEnv() {
+  const project = currentProject.value;
+  const py = env.value?.pythonPath;
+  if (!project?.path || !py || envFixing.value) return;
+
+  envFixing.value = true;
+  envFixError.value = null;
+  envFixNote.value = null;
+  await subscribeInstallStep();
+  try {
+    await invoke("create_virtual_env", {
+      projectPath: project.path,
+      pythonExecutable: py,
+    });
+    // 重新探测，拿到新 venv 的解释器与最新依赖状态
+    await detectEnv();
+    if (missingDeps.value.length) {
+      await invoke("install_dependencies", {
+        pythonPath: env.value?.pythonPath,
+        packages: missingDeps.value.map((d) => d.name),
+      });
+      await detectEnv();
+    }
+  } catch (error) {
+    console.error("[Overview] create_virtual_env failed:", error);
+    envFixError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    envFixing.value = false;
+    envFixNote.value = null;
+    unlistenInstall?.();
+    unlistenInstall = undefined;
+  }
+}
+
+/** 仅补装缺失依赖（venv 已存在时） */
+async function installDeps() {
+  const py = env.value?.pythonPath;
+  if (!py || !missingDeps.value.length || envFixing.value) return;
+
+  envFixing.value = true;
+  envFixError.value = null;
+  envFixNote.value = null;
+  await subscribeInstallStep();
+  try {
+    await invoke("install_dependencies", {
+      pythonPath: py,
+      packages: missingDeps.value.map((d) => d.name),
+    });
+    await detectEnv();
+  } catch (error) {
+    console.error("[Overview] install_dependencies failed:", error);
+    envFixError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    envFixing.value = false;
+    envFixNote.value = null;
+    unlistenInstall?.();
+    unlistenInstall = undefined;
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /* 数据计算                                                            */
@@ -350,6 +440,49 @@ function goTo(name: "ProjectGenerate" | "ProjectExecute" | "ProjectCoverage") {
                 }}
               </span>
             </div>
+          </div>
+
+          <!-- 环境修复（无 venv 重建 / 缺依赖补装） -->
+          <div v-if="envFixing" class="mt-3 space-y-1">
+            <div class="flex items-center gap-2 text-xs font-medium text-brand-600">
+              <Loader2 class="h-3.5 w-3.5 animate-spin" />
+              {{ t("overview.fixingEnv") }}
+            </div>
+            <div v-if="envFixNote" class="pl-5 text-xs text-zinc-500">{{ envFixNote }}</div>
+          </div>
+
+          <div v-else-if="envFixError" class="mt-3 space-y-1.5">
+            <div class="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              {{ envFixError }}
+            </div>
+            <AppButton
+              variant="secondary"
+              size="sm"
+              @click="env.venvExists ? installDeps() : createEnv()"
+            >
+              {{ t("common.retry") }}
+            </AppButton>
+          </div>
+
+          <div v-else class="mt-3 space-y-1.5">
+            <AppButton
+              v-if="!env.venvExists"
+              variant="primary"
+              size="sm"
+              @click="createEnv"
+            >
+              <Wrench class="h-3.5 w-3.5" />
+              {{ t("overview.createEnv") }}
+            </AppButton>
+            <AppButton
+              v-else-if="missingDeps.length"
+              variant="secondary"
+              size="sm"
+              @click="installDeps"
+            >
+              <Download class="h-3.5 w-3.5" />
+              {{ t("overview.installDeps") }}
+            </AppButton>
           </div>
         </template>
 
