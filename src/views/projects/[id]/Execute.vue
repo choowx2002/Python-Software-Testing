@@ -233,6 +233,37 @@ const customArguments = ref("");
 
 const pytestOutput = ref<TestOutputEvent[]>([]);
 
+/**
+ * 日志批量冲刷（NFR003 修复）：
+ * 事件到达先入「非响应式」缓冲，每帧（rAF）最多合并一次进 pytestOutput。
+ * 修复前每行事件都触发 push + shift + 整表 500 行重渲染，10 万行洪流下
+ * 每秒约 1.6 万次重渲染会把 UI 主线程拖垮（实测 UI 卡死、内存 273MB）。
+ * 批量后渲染次数降到 ~60 次/秒，UI 在洪流中保持流畅；窗口被隐藏时 rAF
+ * 停发，用安全阀在缓冲过大时立即冲刷，避免内存无限增长。
+ */
+const pendingOutput: TestOutputEvent[] = [];
+let flushScheduled = false;
+
+function flushPendingOutput() {
+  flushScheduled = false;
+  if (pendingOutput.length === 0) return;
+  const batch = pendingOutput.splice(0, pendingOutput.length);
+  pytestOutput.value.push(...batch);
+  if (pytestOutput.value.length > 500) {
+    pytestOutput.value.splice(0, pytestOutput.value.length - 500);
+  }
+}
+
+function scheduleFlushOutput() {
+  if (flushScheduled) return;
+  if (pendingOutput.length > 5000) {
+    flushPendingOutput();
+    return;
+  }
+  flushScheduled = true;
+  requestAnimationFrame(flushPendingOutput);
+}
+
 const currentRunId = ref<string | null>(null);
 const currentTest = ref<string | null>(null);
 
@@ -598,6 +629,7 @@ async function setupTestListeners() {
 
     testResults.value = [];
     pytestOutput.value = [];
+    pendingOutput.length = 0;
     expandedFailures.value = new Set();
 
     executionStatus.value = "running";
@@ -614,14 +646,11 @@ async function setupTestListeners() {
       return;
     }
 
-    pytestOutput.value.push({
+    pendingOutput.push({
       ...event.payload,
       logId: logCounter++,
     });
-
-    if (pytestOutput.value.length > 500) {
-      pytestOutput.value.shift();
-    }
+    scheduleFlushOutput();
 
     parseRealtimeProgress(event.payload.line);
   });
@@ -632,6 +661,9 @@ async function setupTestListeners() {
       if (event.payload.runId !== currentRunId.value) {
         return;
       }
+
+      // 冲刷残留缓冲，确保日志尾部完整显示
+      flushPendingOutput();
 
       isRunning.value = false;
       isRunningSuite.value = false;
@@ -950,6 +982,7 @@ function resetExecutionState() {
 
   testResults.value = [];
   pytestOutput.value = [];
+  pendingOutput.length = 0;
 
   expandedFailures.value = new Set();
 
@@ -1303,6 +1336,7 @@ function rerunFailedTests() {
 
 function clearOutput() {
   pytestOutput.value = [];
+  pendingOutput.length = 0;
 }
 
 /** 把结果里的相对路径解析为绝对路径 */

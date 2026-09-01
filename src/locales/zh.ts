@@ -492,11 +492,11 @@ export default {
     algoDesc: {
       MOSA: "先易后难，优先覆盖容易测试的代码，适合大多数项目。",
       DYNAMOSA: "MOSA 升级版，根据进度动态调整，大型项目表现更好。",
-      WSPA: "一次性生成整套测试，覆盖完整但速度较慢。",
+      WHOLE_SUITE: "一次性生成整套测试，覆盖完整但速度较慢。",
       RANDOM: "完全随机生成，最快但质量不稳，仅用于对比实验。",
     },
     algorithmHint:
-      "新手建议：不确定选哪个 → MOSA；大型复杂项目 → DYNAMOSA；需要完整测试套件 → WSPA；只想快速看看效果 → RANDOM。",
+      "新手建议：不确定选哪个 → MOSA；大型复杂项目 → DYNAMOSA；需要完整测试套件 → WHOLE_SUITE；只想快速看看效果 → RANDOM。",
     timeLimit: "每个文件的用时",
     timeLimitDesc: "Pynguin 对每个文件尝试多久。时间越长测试越好，但更慢。",
     timeLimitUnit: "秒",
@@ -790,7 +790,7 @@ export default {
   },
   help: {
     algorithm:
-      "MOSA · 多目标排序算法：像考试时先做简单题再做难题，优先覆盖容易测试的代码，逐步攻克复杂部分。适合大多数项目，是新手的首选。\n\nDYNAMOSA · 动态多目标排序算法：MOSA 的升级版，根据测试进度动态调整策略，大型项目表现更好，但需要更多计算时间。\n\nWSPA · 整套件方法：像一口气写完所有作业，一次性生成整个测试套件，覆盖完整，但速度较慢。\n\nRANDOM · 随机策略：完全随机生成测试用例，像掷骰子碰运气，速度最快但质量不稳定，通常只用于对比实验。\n\n新手建议：不确定选哪个 → MOSA；大型复杂项目 → DYNAMOSA；需要完整测试套件 → WSPA；只想快速看看效果 → RANDOM。",
+      "MOSA · 多目标排序算法：像考试时先做简单题再做难题，优先覆盖容易测试的代码，逐步攻克复杂部分。适合大多数项目，是新手的首选。\n\nDYNAMOSA · 动态多目标排序算法：MOSA 的升级版，根据测试进度动态调整策略，大型项目表现更好，但需要更多计算时间。\n\nWHOLE_SUITE · 整套件方法（新版 Pynguin 中 WSPA 的改名）：像一口气写完所有作业，一次性生成整个测试套件，覆盖完整，但速度较慢。\n\nRANDOM · 随机策略：完全随机生成测试用例，像掷骰子碰运气，速度最快但质量不稳定，通常只用于对比实验。\n\n新手建议：不确定选哪个 → MOSA；大型复杂项目 → DYNAMOSA；需要完整测试套件 → WHOLE_SUITE；只想快速看看效果 → RANDOM。",
     chromosomeLength: "每个生成的测试用例可以包含多少语句。默认 40 适合大多数项目。",
     populationSize: "Pynguin 同时探索的候选测试数量。默认 50。",
     branchCoverage: "启用 --branch 模式，统计 if/else 等分支覆盖。会增加运行时间但更完整。",
@@ -877,7 +877,7 @@ export default {
         title: "生成（Generate）",
         points: [
           "树形浏览选择源文件（自动排除 tests/ 与 venv）。",
-          "可选算法：MOSA / DYNAMOSA / WSPA / RANDOM。",
+          "可选算法：MOSA / DYNAMOSA / WHOLE_SUITE / RANDOM。",
           "可调最大搜索时间、断言生成、最大用例数与输出文件夹。",
           "生成的测试仅写入输出目录，绝不修改源码。",
         ],

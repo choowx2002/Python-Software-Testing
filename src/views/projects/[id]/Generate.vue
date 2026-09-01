@@ -110,13 +110,13 @@ const resultMenuItems = computed(() => {
 const projectId = computed(() => Number(route.params.id));
 
 type GenerationStatus = "idle" | "running" | "completed" | "failed";
-type Algorithm = "MOSA" | "DYNAMOSA" | "WSPA" | "RANDOM";
+type Algorithm = "MOSA" | "DYNAMOSA" | "WHOLE_SUITE" | "RANDOM";
 
 /** 每种策略的标识色（与帮助文案中的 🔵🟢🟡🔴 对应） */
 const algoAccent: Record<Algorithm, string> = {
   MOSA: "bg-sky-500",
   DYNAMOSA: "bg-emerald-500",
-  WSPA: "bg-amber-500",
+  WHOLE_SUITE: "bg-amber-500",
   RANDOM: "bg-rose-500",
 };
 
@@ -1175,7 +1175,7 @@ function onFocusSearch() {
               </div>
               <div class="grid grid-cols-2 gap-2">
                 <button
-                  v-for="alg in (['MOSA', 'DYNAMOSA', 'WSPA', 'RANDOM'] as Algorithm[])"
+                  v-for="alg in (['MOSA', 'DYNAMOSA', 'WHOLE_SUITE', 'RANDOM'] as Algorithm[])"
                   :key="alg"
                   type="button"
                   :disabled="isGenerating"

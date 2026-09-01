@@ -130,86 +130,115 @@ LITERATURE REVIEW9
 2.4 Concept of Regression Testing10
 2.5 Code Coverage Analysis11
 2.6 Python Testing Ecosystem12
-2.6.1 Text Execution Library Comparison12
-2.6.2 Test Case Generation Comparison1
-2.6.3 Code Coverage Tools1
-2.7 Summary1
-CHAPTER 3 1
-METHODOLOGY AND WORK PLAN1
-3.1 Introduction1
-3.2 Software Development Methodology1
-3.3 Development Tools and Environment1
-3.4 Work Breakdown Structure (WBS)1
-3.5 Gantt Chart1
-3.6 Risk Management and Mitigation1
-3.7 Summary1
-CHAPTER 4 1
-PROJECT SPECIFICATION1
-4.1 Introduction1
-4.2 System Requirements1
-4.2.1 Functional Requirements1
-4.2.2 Non-Functional Requirements1
-4.3 Use Case1
-4.3.1 Actors Identification1
-4.3.2 Use-Case Diagram1
-4.3.3 Use-Case 1: Setup Project Environment1
-4.3.4 Use-Case 2: Execute Tests and View Results1
-4.3.5 Use-Case 3: Generate Unit Tests1
-4.3.6 Use-Case 4: Analyze Code Coverage1
-4.4 Activity Diagrams1
-4.5 Sequences Diagrams1
-CHAPTER 5 1
-SYSTEM DESIGN1
-5.1 High-Level Architecture Design1
-5.2 Component Interaction1
-5.2.1 Test Environment Setup1
-5.2.2 Automated Test Generation1
-5.2.3 Test Execution1
-5.2.4 Automated Coverage Analysis1
-5.3 Database and Data Storage Design1
-5.3.1 Multi-Project Data Isolation Strategy1
-5.3.2 Entity-Relationship Diagram1
-5.3.3 Data Dictionary1
-5.4 Prototype User Interface Design1
-5.4.1 Project Management Dashboard1
-5.4.2 Project Management Dashboard1
-REFERENCES1
+2.6.1 Test Execution Library Comparison12
+2.6.2 Test Case Generation Comparison14
+2.6.3 Code Coverage Tools15
+2.7 Summary16
+CHAPTER 3 17
+METHODOLOGY AND WORK PLAN17
+3.1 Introduction17
+3.2 Software Development Methodology17
+3.3 Development Tools and Environment20
+3.4 Work Breakdown Structure (WBS)21
+3.5 Gantt Chart22
+3.6 Risk Management and Mitigation23
+3.7 Summary24
+CHAPTER 4 25
+PROJECT SPECIFICATION25
+4.1 Introduction25
+4.2 System Requirements25
+4.2.1 Functional Requirements26
+4.2.2 Non-Functional Requirements27
+4.3 Use Case28
+4.3.1 Actors Identification28
+4.3.2 Use-Case Diagram28
+4.3.3 Use-Case 1: Setup Project Environment29
+4.3.4 Use-Case 2: Execute Tests and View Results32
+4.3.5 Use-Case 3: Generate Unit Tests35
+4.3.6 Use-Case 4: Analyze Code Coverage37
+4.4 Activity Diagrams41
+4.5 Sequence Diagrams47
+CHAPTER 5 53
+SYSTEM DESIGN53
+5.1 High-Level Architecture Design53
+5.2 Component Interaction55
+5.2.1 Test Environment Setup55
+5.2.2 Automated Test Generation56
+5.2.3 Test Execution57
+5.2.4 Automated Coverage Analysis58
+5.3 Database and Data Storage Design58
+5.3.1 Multi-Project Data Isolation Strategy59
+5.3.2 Entity-Relationship Diagram59
+5.3.3 Data Dictionary62
+CHAPTER 6 70
+IMPLEMENTATION, TESTING AND EVALUATION70
+6.1 Implementation Highlights70
+6.1.1 Three-Runtime Architecture Implementation70
+6.1.2 Test Execution Pipeline70
+6.1.3 Test Generation Pipeline70
+6.1.4 Coverage Analysis Pipeline70
+6.1.5 Regression Suites and History70
+6.2 System Testing70
+6.2.1 Unit Testing of the Application Itself70
+6.2.2 Functional Requirement Verification70
+6.2.3 Non-Functional Requirement Evaluation70
+6.2.4 End-to-End Workflow Demonstration70
+6.2.5 Effectiveness Analysis70
+6.3 Limitations and Threats to Validity70
+6.4 User Interface Implementation70
+6.5 Summary70
+CHAPTER 7 71
+CONCLUSION AND FUTURE WORK71
+7.1 Achievement of Objectives71
+7.2 Future Work71
+REFERENCES72
 
 === PAGE BREAK ===
 
 LIST OF TABLES
-Table 2.1: Comparison of unittest, nose2, and pytest.10
-Table 2.2: Comparison of Test Case Generation Approaches12
-Table 2.3: Selected Tools and Frameworks14
-Table 3.1: Risk Management and Mitigation21
-Table 4.1: Functional Requirements24
-Table 4.2: Non-Functional Requirements25
-Table 4.3: Actors Identification26
-Table 4.4: Use-Case Description of the Setup Project Environment26
-Table 4.5: Use-Case Description of Execute Tests and View Results29
-Table 4.6: Use-Case Description of Generate Unit Tests32
-Table 4.7: Use-Case Description of Analyze Code Coverage35
+Table 2.1: Comparison of unittest, nose2, and pytest.12
+Table 2.2: Comparison of Test Case Generation Approaches14
+Table 2.3: Selected Tools and Frameworks16
+Table 3.1: Risk Management and Mitigation23
+Table 4.1: Functional Requirements26
+Table 4.2: Non-Functional Requirements27
+Table 4.3: Actors Identification28
+Table 4.4: Use-Case Description of the Setup Project Environment29
+Table 4.5: Use-Case Description of Execute Tests and View Results32
+Table 4.6: Use-Case Description of Generate Unit Tests35
+Table 4.7: Use-Case Description of Analyze Code Coverage37
+Table 5.1: Projects Table Structure.62
+Table 5.2: Test Execution History Table Structure.63
+Table 5.3: Regression Suites Table Structure.64
+Table 5.4: Coverage Results Table Structure.65
+Table 5.5: Generation History Table Structure.66
+Table 5.6: Coverage History Table Structure.67
+Table 5.7: Execution Result Details Table Structure.68
+Table 5.8: Generation File Details Table Structure.69
 
 === PAGE BREAK ===
 
 LIST OF FIGURES
-Figure 3.1: Gantt Chart.20
-Figure 4.1: Use-Case Diagram of the Automated Testing Software.26
-Figure 4.2: Activity Diagram of the Setup Project Environment.39
-Figure 4.3: Activity Diagram of the Execute Tests.40
-Figure 4.4: Activity Diagram of the View Test Results.41
-Figure 4.5: Activity Diagram of the Generate Unit Tests.42
-Figure 4.6: Activity Diagram of the Analyze Code Coverage.43
-Figure 4.7: Sequence Diagram of the Setup Project Environment.44
-Figure 4.8: Sequence Diagram of the Execute Tests.45
-Figure 4.9: Sequence Diagram of the View Test Results.46
-Figure 4.10: Sequence Diagram of the Generate Unit Tests.47
-Figure 4.11: Sequence Diagram of the Analyze Code Coverage.48
-Figure 5.1: High-Level Architecture of the Automated Testing Software.50
-Figure 5.2: Sequence Diagram of the Environment Setup.51
-Figure 5.3: Sequence Diagram of the Automated Test Generation.52
-Figure 5.4: Sequence Diagram of the Test Execution.53
-Figure 5.5: Sequence Diagram of the Automated Coverage Analysis.54
+Figure 3.1: Gantt Chart.22
+Figure 4.1: Use-Case Diagram of the Automated Testing Software.28
+Figure 4.2: Activity Diagram of the Setup Project Environment.41
+Figure 4.3: Activity Diagram of the Execute Tests.42
+Figure 4.4: Activity Diagram of the View Test Results.43
+Figure 4.5: Activity Diagram of the Generate Unit Tests.44
+Figure 4.6: Activity Diagram of the Analyze Code Coverage.45
+Figure 4.7: Activity Diagram of the View History.46
+Figure 4.8: Sequence Diagram of the Setup Project Environment.47
+Figure 4.9: Sequence Diagram of the Execute Tests.48
+Figure 4.10: Sequence Diagram of the View Test Results.49
+Figure 4.11: Sequence Diagram of the Generate Unit Tests.50
+Figure 4.12: Sequence Diagram of the Analyze Code Coverage.51
+Figure 4.13: Sequence Diagram of the View History.52
+Figure 5.1: High-Level Architecture of the Automated Testing Software.54
+Figure 5.2: Sequence Diagram of the Environment Setup.55
+Figure 5.3: Sequence Diagram of the Automated Test Generation.56
+Figure 5.4: Sequence Diagram of the Test Execution.57
+Figure 5.5: Sequence Diagram of the Automated Coverage Analysis.58
+Figure 5.6: Entity-Relationship Diagram.60
 INTRODUCTION
 General Introduction
 Nowadays, software testing is a very important phase in the software development lifecycle. The aim of it is to ensure the reliability and correctness of the software. In modern development practices, major big technology companies have the position or even specific department for software testing. This position or department is responsible for verifying software quality and detecting potential defects.
@@ -285,7 +314,7 @@ Common types of code coverage include statement coverage, branch coverage, and p
 Code coverage analysis is useful in identifying the under-tested parts of a system. By highlighting areas of low coverage, developers can improve test effectiveness by designing additional test cases to cover the remaining parts. In practical Python development, code coverage is commonly measured using automated tools such as coverage.py. These tools provide detailed reports on executed and unexecuted code segments. These tools also are often integrated into testing workflows to support continuous evaluation of test quality.
 Python Testing Ecosystem
 Nowadays, the Python programming language already has a mature ecosystem and library for manual or automated testing. These tools or frameworks support different testing needs. These tools generally support test execution frameworks, test generation libraries and code coverage analysers. In industry, these tools are widely used to make testing faster and more efficient. However, the configuration and setup are too complex and challenging for students and novice developers. 
-Text Execution Library Comparison
+Test Execution Library Comparison
 Test execution library is used to define and execute the testing. The common Python libraries include unittest, nose2 and pytest. In the current practical industry, pytest is the dominant choice in practice among them. PyPI statistics show significantly higher downloads for pytest compared to nose2 (PyPI Download Stats, n.d.-a; PyPI Download Stats, n.d.-b). This disparity highlights the dominant position of pytest in practice. 
 Table 2.1:Comparison of unittest, nose2, and pytest.
 Feature
@@ -577,7 +606,7 @@ FR010
 The user shall be able to configure advanced generation settings, such as time limits and target functions.
 Coverage Analysis Module
 FR011
-The system shall automatically trigger the coverage tool immediately after a successful test execution to collect data.
+The system shall provide one-click code coverage collection immediately after test execution completes, without requiring the user to reconfigure the coverage toolchain.
 FR012
 The system shall display the overall coverage percentage and highlight executed and uncovered lines of code in the code viewer.
 FR013
@@ -727,7 +756,7 @@ Stakeholders and Interests:
 User (Student/Novice) – Wants to run tests easily, monitor real-time progress without the application freezing, and understand the results visually without needing to parse complex command-line logs. 
 Python Execution Environment – Needs to execute the targeted test cases and output execution logs and metrics via standard output streams.
 Brief Description:
-This use case describes how a user selects specific test files or folders and executes them. The system runs the tests via a Python subprocess, incrementally streams real-time logs to the GUI, and displays a visual summary of the results. Upon completion, it automatically triggers code coverage data collection and provides an optional workflow for users to save their execution parameters as a regression suite for future use. 
+This use case describes how a user selects specific test files or folders and executes them. The system runs the tests via a Python subprocess, incrementally streams real-time logs to the GUI, and displays a visual summary of the results. Upon completion, The system shall provide one-click code coverage collection immediately after test execution completes, without requiring the user to reconfigure the coverage toolchain. 
 Trigger:
 The user selects a test file or folder from the project directory and clicks the "Run Tests" button in the Graphical User Interface. 
 Relationships:
@@ -745,7 +774,7 @@ The system parses the real-time logs and streams structured updates to the Vue f
 The UI continuously updates the progress indicator and displays real-time execution logs.  
 Upon subprocess completion, the system parses the final aggregated test results.  
 The system displays a visual summary of passed, failed, and skipped test cases on the dashboard. Perform 9.1 or continue to 10.  
-The system automatically triggers the coverage library in a new subprocess to collect statement and branch coverage data.  
+The system shall provide one-click code coverage collection immediately after test execution completes, without requiring the user to reconfigure the coverage toolchain.  
 The use case ends successfully, and the coverage data is cached for the Analysis module.
 Sub-flows:
 6.1 If the log parsing and event emission are successful, continue to flow no. 7.  
@@ -862,15 +891,17 @@ Figure 4.3: Activity Diagram of the Execute Tests.
 Figure 4.4: Activity Diagram of the View Test Results.
 Figure 4.5: Activity Diagram of the Generate Unit Tests.
 Figure 4.6: Activity Diagram of the Analyze Code Coverage.
-Sequences Diagrams
-Figure 4.7: Sequence Diagram of the Setup Project Environment.
-Figure 4.8: Sequence Diagram of the Execute Tests.
-Figure 4.9: Sequence Diagram of the View Test Results.
-Figure 4.10: Sequence Diagram of the Generate Unit Tests.
-Figure 4.11: Sequence Diagram of the Analyze Code Coverage.
+Figure 4.7: Activity Diagram of the View History.
+Sequence Diagrams
+Figure 4.8: Sequence Diagram of the Setup Project Environment.
+Figure 4.9: Sequence Diagram of the Execute Tests.
+Figure 4.10: Sequence Diagram of the View Test Results.
+Figure 4.11: Sequence Diagram of the Generate Unit Tests.
+Figure 4.12: Sequence Diagram of the Analyze Code Coverage.
+Figure 4.13: Sequence Diagram of the View History.
 SYSTEM DESIGN
 High-Level Architecture Design
-This section outlines the core technologies adopted in the proposed system and illustrates their integration to form a cohesive software architecture. As illustrated in Figure 4.1, the system is decoupled into three primary runtime environments, unified by the Tauri v2 framework.
+This section outlines the core technologies adopted in the proposed system and illustrates their integration to form a cohesive software architecture. As illustrated in Figure 5.1, the system is decoupled into three primary runtime environments, unified by the Tauri v2 framework.
 Tauri v2 serves as the foundational framework that unifies the entire application stack. It provides a bridge between the frontend and the backend. The core feature of Tauri framework is to allow us to build lightweight, ultra-fast, and highly secure applications by combining modern website frontend technologies with a Rust backend.
 Vue 3 framework serves as the graphical user interface. It provides an interactive dashboard for project management and test-related features. This layer is responsible solely for UI rendering and user interaction handling. All business logic and heavy computation are offloaded to the backend.
 Rust serves as the central system of the application. Built with Tauri v2, Rust exposes a secure, type-safe IPC interface to the frontend. This layer is responsible for all business logic and system orchestration. It receives IPC commands from the frontend and manages the full application lifecycle. It also manages local caching, project state, and file system interactions.
@@ -890,19 +921,24 @@ Figure 5.4: Sequence Diagram of the Test Execution.
 When the user triggers test execution, the Rust backend spawns a Python subprocess invoking pytest library. Crucially, instead of adopting a synchronous blocking model, the Rust backend incrementally reads the standard output stream. It parses each line of execution logs in real-time and pushes structured updates to the Vue frontend via event emission system. This asynchronous design guarantees the UI to update the progress indicator and test dashboard continuously without freezing.
 Automated Coverage Analysis
 Figure 5.5: Sequence Diagram of the Automated Coverage Analysis.
-After a successful test execution, the Rust backend automatically triggers coverage.py library in subprocess to collect statement and branch coverage data. The raw coverage output is parsed into a structured JSON format by the Rust layer and cached in the local storage. A coverage-ready event is then emitted to the frontend, which renders an interactive code viewer, highlighting covered and uncovered lines based on the parsed metrics, thereby closing the feedback loop for the user.
+After a test execution completes, the Rust backend presents a post-run summary. Upon the user's one-click confirmation, it invokes coverage.py in a subprocess to collect statement and branch coverage data. The raw coverage output is parsed into a structured JSON format by the Rust layer and cached in the local storage. A coverage-ready event is then emitted to the frontend, which renders an interactive code viewer, highlighting covered and uncovered lines based on the parsed metrics, thereby closing the feedback loop for the user.
 Database and Data Storage Design
 To implement the long-term data retention, the persistence layer utilizes a hybrid storage approach. Structured metadata such as projects, execution history, and regression suites, is managed via an embedded SQLite database integrated into the Tauri. Heavy or unstructured historical data, such as raw code coverage metrics parsed from coverage.py,  are stored as serialized JSON files in the system local application data directory to maintain UI responsiveness and high performance.
 Multi-Project Data Isolation Strategy
-The strict data isolation strategy is enforced to prevent historical test metrics and virtual environment configurations from overlapping between different local Python projects. Each imported project is assigned a unique Snowflake ID. The system creates isolated subdirectories within the application data folder.
+The strict data isolation strategy is enforced to prevent historical test metrics and virtual environment configurations from overlapping between different local Python projects. Each imported project is assigned a unique identifier by the embedded SQLite database. The system creates isolated subdirectories within the application data folder.
 Entity-Relationship Diagram
-The Project table stores metadata for imported local projects. The Test Execution History table saves pass-rate statistics from each executed test. The Regression Suite table holds user-saved execution parameters for one-click reruns. Lastly, the Coverage Results table stores overall coverage metrics while mapping them to the specific local JSON cache files.
+The Project table stores metadata for imported local projects. The Test Execution History table saves pass-rate statistics from each executed test. The Regression Suite table holds user-saved execution parameters for one-click reruns. The Coverage Results table stores overall coverage metrics while mapping them to the specific local JSON cache files. In addition, the Generation History and Coverage History tables record the running history of the test generation and coverage modules, while the Execution Result Details and Generation File Details tables store per-test-case and per-generated-file granular records to support the history view and trend visualization.
 Figure 5.6: Entity-Relationship Diagram.
 Entity Relationship Logic Description:
-A Project has a one-to-many relationship with TestExecutionHistory, meaning one project can have multiple test execution records.
-A Project has a one-to-many relationship with RegressionSuite, meaning one project can contain multiple regression suites.
-A RegressionSuite has a one-to-many relationship with TestExecutionHistory, meaning one regression suite can generate multiple execution histories.
-A TestExecutionHistory has a one-to-zero-or-one relationship with CoverageResults, meaning one test execution may generate zero or one coverage result.
+A Project has a one-to-many relationship with TestExecutionHistory: one project can have multiple test execution records (foreign key project_id, ON DELETE CASCADE).
+A Project has a one-to-many relationship with RegressionSuite: one project can contain multiple regression suites (foreign key project_id, ON DELETE CASCADE).
+A Project has a one-to-many relationship with CoverageResults: one project can have multiple coverage result records (foreign key project_id).
+A Project has a one-to-many relationship with GenerationHistory: one project can have multiple generation runs (foreign key project_id, ON DELETE CASCADE).
+A Project has a one-to-many relationship with CoverageHistory: one project can have multiple coverage run records (foreign key project_id, ON DELETE CASCADE).
+A RegressionSuite has a one-to-many relationship with TestExecutionHistory: one regression suite can generate multiple execution histories (foreign key regression_suite_id, ON DELETE SET NULL).
+A TestExecutionHistory has a one-to-many relationship with ExecutionResultDetails: one execution contains one detail record per test case (foreign key execution_id, ON DELETE CASCADE).
+A GenerationHistory has a one-to-many relationship with GenerationFileDetails: one generation run produces one detail record per generated file (foreign key generation_id, ON DELETE CASCADE).
+A TestExecutionHistory has a zero-or-one relationship with CoverageResults through execution_id (optional link; not enforced as a foreign key in the implementation).
 Data Dictionary
 Table 5.1: Projects Table Structure.
 Field
@@ -911,16 +947,16 @@ Constraints
 Description
 id
 INTEGER
-PRIMARY KEY
-Unique Snowflake identifier.
+PRIMARY KEY AUTOINCREMENT
+Unique identifier for each imported project.
 name
 VARCHAR(255)
 NOT NULL
 User-defined project name or detected folder name.
 project_path
 TEXT
-NOT NULL
-Absolute local file system path of the Python project.
+NOT NULL, UNIQUE
+Absolute local file system path of the Python project. Duplicate paths are rejected on import.
 interpreter_path
 TEXT
 NULL
@@ -928,7 +964,7 @@ Path of the detected or manually configured Python virtual environment interpret
 status
 VARCHAR(20)
 DEFAULT 'active'
-Current project availability status ( active, missing, invalid).
+Current project availability status (active, missing, invalid).
 created_at
 TIMESTAMP
 DEFAULT CURRENT_TIMESTAMP
@@ -937,22 +973,22 @@ last_opened_at
 TIMESTAMP
 NULL
 Latest timestamp when the user accessed the project.
-Table 5.2: Text Execution History Table Structure.
+Table 5.2: Test Execution History Table Structure.
 Field
 Data Type
 Constraints
 Description
 id
 INTEGER
-PRIMARY KEY 
-Unique Snowflake identifier.
-project_id
-INTEGER
-FOREIGN KEY projects(id)
-Identifies the project associated with this test execution.
+PRIMARY KEY AUTOINCREMENT
+Unique identifier for each imported project.
+name
+VARCHAR(255)
+NOT NULL
+User-defined project name or detected folder name.
 regression_suite_id
 INTEGER
-FOREIGN KEY regression_suites(id), NULL
+FOREIGN KEY regression_suites(id) ON DELETE SET NULL
 Identifies the regression suite used. Null if manually triggered.
 execution_type
 VARCHAR(20)
@@ -961,11 +997,11 @@ Defines the execution source (MANUAL or REGRESSION).
 execution_status
 VARCHAR(20)
 NOT NULL
-Final execution status ( SUCCESS, FAILED, ERROR, TIMEOUT).
+Final execution status (SUCCESS, FAILED, ERROR, TIMEOUT).
 command
 TEXT
 NULL
-pytest command executed
+The pytest command executed.
 total_tests
 INTEGER
 NOT NULL
@@ -990,18 +1026,18 @@ executed_at
 TIMESTAMP
 DEFAULT CURRENT_TIMESTAMP
 Date and time when the test execution started.
-Table 5.3: Regression Suits Table Structure.
+Table 5.3: Regression Suites Table Structure.
 Field
 Data Type
 Constraints
 Description
 id
 INTEGER
-PRIMARY KEY 
-Unique Snowflake identifier for each saved regression suite.
+PRIMARY KEY AUTOINCREMENT
+Unique identifier for each saved regression suite.
 project_id
 INTEGER
-FOREIGN KEY REFERENCES projects(id)
+NOT NULL, FOREIGN KEY projects(id) ON DELETE CASCADE
 Associates the regression suite with a specific Python project.
 suite_name
 VARCHAR(100)
@@ -1032,41 +1068,201 @@ id
 INTEGER
 PRIMARY KEY AUTOINCREMENT
 Unique identifier for each coverage result record.
+project_id
+INTEGER
+NOT NULL, FOREIGN KEY projects(id)
+Associates the coverage result with a specific Python project.
 execution_id
 INTEGER
-UNIQUE, FOREIGN KEY test_execution_history(id)
-Associates coverage information with a specific test execution event.
-statement_coverage
+NULL
+Optional link to the test execution that produced this coverage data (not enforced as a foreign key).
+total_statement_coverage
 REAL
 NOT NULL
 Overall statement coverage percentage calculated from the executed tests.
-branch_coverage
+total_branch_coverage
 REAL
+NULL
+Overall branch coverage percentage (populated when branch collection is enabled).
+file_count
+INTEGER
 NOT NULL
-Overall branch coverage percentage calculated from the executed tests.
-cache_file_path
-TEXT
+Number of source files included in the coverage measurement.
+covered_file_count
+INTEGER
 NOT NULL
-Local path pointing to the JSON file containing detailed line-level coverage information.
-file_format
+Number of source files with at least one executed statement.
+Table 5.5: Generation History Table Structure.
+Field
+Data Type
+Constraints
+Description
+id
+INTEGER
+PRIMARY KEY AUTOINCREMENT
+Unique identifier for each test generation record.
+project_id
+INTEGER
+NOT NULL, FOREIGN KEY projects(id) ON DELETE CASCADE
+Identifies the project for which tests were generated.
+generation_status
 VARCHAR(20)
-DEFAULT 'JSON'
-Format of the stored coverage report file.
-generated_at
+NOT NULL
+Final generation status (SUCCESS, FAILED, ...).
+total_files
+INTEGER
+NOT NULL DEFAULT 0
+Number of source modules selected for generation.
+generated_files
+INTEGER
+NOT NULL DEFAULT 0
+Number of test files actually produced.
+duration
+REAL
+NOT NULL DEFAULT 0
+Total generation duration in seconds.
+command
+TEXT
+NULL
+The Pynguin command executed.
+executed_at
 TIMESTAMP
 DEFAULT CURRENT_TIMESTAMP
-Timestamp when the coverage result was generated.
-Prototype User Interface Design
-Project Management Dashboard
-Figure 5.6: Project Management Dashboard Prototype Design.
-This interface serves as the central workspace where users can manage imported projects, review testing status, and access important project information before executing automated testing tasks. The dashboard is divided into three main sections which are navigation area, project management area, and status bar area.
-The left navigation area provides quick access to the major functions of the system. The "Import Project" function allows users to add a local Python project into the system. The "Clone Repository" function enables users to retrieve projects from remote Git repositories. Additionally, the "AI Test Generator" option provides access to the automated test generation feature supported by Pynguin. The resource section contains supporting features such as documentation, issue reporting, and system settings.
-The main area displays a list of available projects managed by the system. Each project is presented with necessary testing information such as project name, environment status, latest test results, test coverage, and the most recent execution time.
-The Environment column provides users status of the project environment. An overview of the execution environment, such as the Python version, virtual environment status, and dependency availability. This helps users identify configuration problems before running tests.
-The Last Test Result column summarizes the outcome of the latest testing execution by showing the number of passed and failed test cases. This allows users to quickly evaluate the current quality status of each project.
-The Coverage column presents the test coverage percentage using a visual progress indicator. This provides users with an immediate understanding of how much of the source code has been tested.
-The bottom status bar area provides global system information. It displays the currently detected Python version, total number of registered projects, and the total number of testing executions performed by the system. This helps users understand the current software environment and overall system usage.
-Project Management Dashboard
+Timestamp when the generation run started.
+Table 5.6: Coverage History Table Structure.
+Field
+Data Type
+Constraints
+Description
+id
+INTEGER
+PRIMARY KEY AUTOINCREMENT
+Unique identifier for each coverage run record.
+project_id
+INTEGER
+NOT NULL, FOREIGN KEY projects(id) ON DELETE CASCADE
+Identifies the project measured.
+coverage_status
+VARCHAR(20)
+NOT NULL
+Status of the coverage run (SUCCESS, FAILED).
+percent_covered
+REAL
+NOT NULL DEFAULT 0
+Overall statement coverage percentage.
+total_statements
+INTEGER
+NOT NULL DEFAULT 0
+Total number of executable statements measured.
+covered_statements
+INTEGER
+NOT NULL DEFAULT 0
+Number of statements executed by the tests.
+duration
+REAL
+NOT NULL DEFAULT 0
+Total coverage run duration in seconds.
+command
+TEXT
+NULL
+The coverage command executed.
+files_json
+TEXT
+NULL
+JSON snapshot of per-file line-level coverage for historical comparison.
+executed_at
+TIMESTAMP
+DEFAULT CURRENT_TIMESTAMP
+Timestamp when the coverage run started.
+Table 5.7: Execution Result Details Table Structure.
+Field
+Data Type
+Constraints
+Description
+id
+INTEGER
+PRIMARY KEY AUTOINCREMENT
+Unique identifier for each per-test-case detail record.
+execution_id
+INTEGER
+NOT NULL, FOREIGN KEY test_execution_history(id) ON DELETE CASCADE
+Links the detail to its parent test execution.
+name
+TEXT
+NOT NULL
+Name of the individual test case.
+file
+TEXT
+NULL
+Test file containing the test case.
+status
+TEXT
+NOT NULL
+Result status (passed, failed, error, skipped, xfailed).
+duration
+REAL
+NOT NULL DEFAULT 0
+Execution time of this test case in seconds.
+error_message
+TEXT
+NULL
+Captured failure or error message.
+line
+INTEGER
+NULL
+Line number of the test case in its file.
+skip_reason
+TEXT
+NULL
+Reason for skipping, when the case was skipped.
+Table 5.8: Generation File Details Table Structure.
+Field
+Data Type
+Constraints
+Description
+id
+INTEGER
+PRIMARY KEY AUTOINCREMENT
+Unique identifier for each generated-file detail record.
+generation_id
+INTEGER
+NOT NULL, FOREIGN KEY generation_history(id) ON DELETE CASCADE
+Links the detail to its parent generation run.
+name
+TEXT
+NOT NULL
+Name of the generated test file.
+relative_path
+TEXT
+NULL
+Path of the generated file relative to the project root.
+test_case_count
+INTEGER
+NOT NULL DEFAULT 0
+Number of test cases detected in the generated file.
+status
+TEXT
+NULL
+Generation result for this file (success, empty, failed).
+IMPLEMENTATION, TESTING AND EVALUATION
+Implementation Highlights
+Three-Runtime Architecture Implementation
+Test Execution Pipeline
+Test Generation Pipeline
+Coverage Analysis Pipeline
+Regression Suites and History
+System Testing
+Unit Testing of the Application Itself
+Functional Requirement Verification
+Non-Functional Requirement Evaluation
+End-to-End Workflow Demonstration
+Effectiveness Analysis
+Limitations and Threats to Validity
+User Interface Implementation
+Summary
+CONCLUSION AND FUTURE WORK
+Achievement of Objectives
+Future Work
 REFERENCES
 Ammann, P. and Offutt, J., 2016. Introduction to Software Testing. 2nd ed. Cambridge: Cambridge University Press.
 Bai, G. R., Smith, J., & Stolee, K. T. (2021). How students unit test: Perceptions, practices, and pitfalls. In Proceedings of the 26th ACM Conference on Innovation and Technology in Computer Science Education V. 1 (ITiCSE '21), pp. 248-254. ACM. https://doi.org/10.1145/3430665.3456368

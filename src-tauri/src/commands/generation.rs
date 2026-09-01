@@ -406,6 +406,7 @@ pub async fn generate_tests(
                 let reader = BufReader::new(stdout);
                 let mut lines = reader.lines();
                 while let Ok(Some(line)) = lines.next_line().await {
+                    let emit_start = tokio::time::Instant::now();
                     let _ = stdout_handle.emit(
                         "generation-output",
                         GenerationOutputEvent {
@@ -414,6 +415,7 @@ pub async fn generate_tests(
                             line,
                         },
                     );
+                    crate::perf::record_emit(emit_start.elapsed());
                 }
             }
         });
@@ -425,6 +427,7 @@ pub async fn generate_tests(
                 let reader = BufReader::new(stderr);
                 let mut lines = reader.lines();
                 while let Ok(Some(line)) = lines.next_line().await {
+                    let emit_start = tokio::time::Instant::now();
                     let _ = stderr_handle.emit(
                         "generation-output",
                         GenerationOutputEvent {
@@ -433,6 +436,7 @@ pub async fn generate_tests(
                             line,
                         },
                     );
+                    crate::perf::record_emit(emit_start.elapsed());
                 }
             }
         });

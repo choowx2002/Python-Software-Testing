@@ -492,11 +492,11 @@ reviewStep: {
     algoDesc: {
       MOSA: "Easy code first, then hard parts. Great for most projects.",
       DYNAMOSA: "Upgraded MOSA that adjusts dynamically. Better for large projects.",
-      WSPA: "Generates the whole suite at once. Complete, but slower.",
+      WHOLE_SUITE: "Generates the whole suite at once. Complete, but slower.",
       RANDOM: "Fully random generation. Fastest, but unstable. For experiments.",
     },
     algorithmHint:
-      "Beginners Tips: not sure → MOSA; large complex project → DYNAMOSA; full test suite → WSPA; quick preview → RANDOM.",
+      "Beginners Tips: not sure → MOSA; large complex project → DYNAMOSA; full test suite → WHOLE_SUITE; quick preview → RANDOM.",
     timeLimit: "Time per file",
     timeLimitDesc: "How long Pynguin tries per file. More time means better tests but slower runs.",
     timeLimitUnit: "seconds",
@@ -790,7 +790,7 @@ reviewStep: {
   },
   help: {
     algorithm:
-      "MOSA · Many-Objective Sorting Algorithm: Like solving easy exam questions first, it prioritizes easy-to-test code and gradually tackles complex parts. Recommended default for most projects and beginners.\n\nDYNAMOSA · Dynamic Many-Objective Sorting Algorithm: An upgraded MOSA that adjusts its strategy dynamically as testing progresses. Better on large projects, but needs more computation time.\n\nWSPA · Whole-Suite Approach: Like finishing all homework in one go, it generates the entire test suite at once for complete coverage, but is slower.\n\nRANDOM · Random Strategy: Generates test cases completely at random, like rolling dice. Fastest but unstable quality, usually only for comparison experiments.\n\nBeginners: not sure → MOSA; large complex project → DYNAMOSA; full test suite needed → WSPA; quick preview → RANDOM.",
+      "MOSA · Many-Objective Sorting Algorithm: Like solving easy exam questions first, it prioritizes easy-to-test code and gradually tackles complex parts. Recommended default for most projects and beginners.\n\nDYNAMOSA · Dynamic Many-Objective Sorting Algorithm: An upgraded MOSA that adjusts its strategy dynamically as testing progresses. Better on large projects, but needs more computation time.\n\nWHOLE_SUITE · Whole-Suite Approach (renamed from WSPA in newer Pynguin): Like finishing all homework in one go, it generates the entire test suite at once for complete coverage, but is slower.\n\nRANDOM · Random Strategy: Generates test cases completely at random, like rolling dice. Fastest but unstable quality, usually only for comparison experiments.\n\nBeginners: not sure → MOSA; large complex project → DYNAMOSA; full test suite needed → WHOLE_SUITE; quick preview → RANDOM.",
     chromosomeLength: "How many statements each generated test can contain. Default 40 suits most projects.",
     populationSize: "How many candidate tests Pynguin explores at once. Default 50.",
     branchCoverage: "Enable --branch mode to track if/else branch coverage. Slower but more complete.",
@@ -878,7 +878,7 @@ reviewStep: {
         title: "Generate",
         points: [
           "Pick source files with a tree browser — tests/ and venv are excluded automatically.",
-          "Choose an algorithm: MOSA / DYNAMOSA / WSPA / RANDOM.",
+          "Choose an algorithm: MOSA / DYNAMOSA / WHOLE_SUITE / RANDOM.",
           "Tune max search time, assertion generation, max test cases and the output folder.",
           "Generated tests are written only to the output directory; your source code is never modified.",
         ],

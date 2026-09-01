@@ -225,6 +225,11 @@ pub async fn run_coverage(
 
     args.push("-m".to_string());
     args.push("pytest".to_string());
+    // NFR003 取证：与 execution.rs 同理，TESTMATE_PERF=1 时加 -s 让用例输出
+    // 逐行流经 coverage-output 事件（pytest 默认捕获会吞掉输出）。
+    if crate::perf::enabled() {
+        args.push("-s".to_string());
+    }
     args.extend(test_files.iter().cloned());
 
     let mut command_str = interpreter.display().to_string();
@@ -286,6 +291,7 @@ pub async fn run_coverage(
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
         while let Ok(Some(line)) = lines.next_line().await {
+            let emit_start = tokio::time::Instant::now();
             let _ = stdout_handle.emit(
                 "coverage-output",
                 CoverageOutputEvent {
@@ -294,6 +300,7 @@ pub async fn run_coverage(
                     line,
                 },
             );
+            crate::perf::record_emit(emit_start.elapsed());
         }
     });
 
@@ -303,6 +310,7 @@ pub async fn run_coverage(
         let reader = BufReader::new(stderr);
         let mut lines = reader.lines();
         while let Ok(Some(line)) = lines.next_line().await {
+            let emit_start = tokio::time::Instant::now();
             let _ = stderr_handle.emit(
                 "coverage-output",
                 CoverageOutputEvent {
@@ -311,6 +319,7 @@ pub async fn run_coverage(
                     line,
                 },
             );
+            crate::perf::record_emit(emit_start.elapsed());
         }
     });
 

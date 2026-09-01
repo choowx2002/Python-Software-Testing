@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod perf;
 mod state;
 
 use tauri::Manager;
@@ -27,6 +28,9 @@ pub fn run() {
             }
         }))
         .setup(|app| {
+            // NFR003/NFR004 取证：TESTMATE_PERF=1 时启动性能采样（无前端改动）
+            crate::perf::start_memory_sampler();
+
             // 启动时清理上次崩溃残留的子进程（PID 文件）
             commands::cleanup_orphan_pids(app.handle());
 

@@ -403,6 +403,13 @@ pub async fn run_tests_core(
     let junit_path = std::env::temp_dir().join(format!("pytest-{}.xml", run_id));
 
     let mut args = vec!["-m".to_string(), "pytest".to_string(), "-v".to_string()];
+    // NFR003 取证：TESTMATE_PERF=1 时加 -s（--capture=no）。pytest 默认 fd 捕获
+    // 会把用例 stdout/stderr 缓存吞掉，日志洪流到不了 emit 管线（实测 n 只有几十）；
+    // -s 让输出逐行流经 test-output 事件，heavy log streaming 测量才有意义。
+    // 正常模式（未设 TESTMATE_PERF）保持原行为，零影响。
+    if crate::perf::enabled() {
+        args.push("-s".to_string());
+    }
     args.extend(pytest_args);
     if !test_cases.is_empty() {
         args.extend(test_cases);
@@ -464,11 +471,13 @@ pub async fn run_tests_core(
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
         while let Ok(Some(line)) = lines.next_line().await {
+            let emit_start = tokio::time::Instant::now();
             let _ = stdout_handle.emit("test-output", TestOutputEvent {
                 run_id: stdout_run_id.clone(),
                 stream: "stdout".to_string(),
                 line,
             });
+            crate::perf::record_emit(emit_start.elapsed());
         }
     });
 
@@ -478,11 +487,13 @@ pub async fn run_tests_core(
         let reader = BufReader::new(stderr);
         let mut lines = reader.lines();
         while let Ok(Some(line)) = lines.next_line().await {
+            let emit_start = tokio::time::Instant::now();
             let _ = stderr_handle.emit("test-output", TestOutputEvent {
                 run_id: stderr_run_id.clone(),
                 stream: "stderr".to_string(),
                 line,
             });
+            crate::perf::record_emit(emit_start.elapsed());
         }
     });
 
