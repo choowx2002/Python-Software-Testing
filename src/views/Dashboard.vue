@@ -390,11 +390,21 @@ const coverageTone = (coverage: number) =>
 
       <p class="section-label mb-1.5 mt-5">Resources</p>
       <div class="space-y-0.5">
-        <AppTooltip :content="t('dashboard.comingSoon')" position="right">
-          <AppNavItem :icon="BookOpen" label="Documentation" disabled :title="t('dashboard.comingSoon')" />
+        <AppTooltip :content="t('docs.title')" position="right">
+          <AppNavItem
+            :icon="BookOpen"
+            :label="t('dashboard.documentation')"
+            :description="t('dashboard.documentationDesc')"
+            @click="router.push('/docs')"
+          />
         </AppTooltip>
-        <AppTooltip :content="t('dashboard.comingSoon')" position="right">
-          <AppNavItem :icon="Bug" label="Report Issue" disabled :title="t('dashboard.comingSoon')" />
+        <AppTooltip :content="t('reportIssue.title')" position="right">
+          <AppNavItem
+            :icon="Bug"
+            :label="t('dashboard.reportIssue')"
+            :description="t('dashboard.reportIssueDesc')"
+            @click="router.push('/report')"
+          />
         </AppTooltip>
       </div>
 

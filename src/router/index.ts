@@ -19,6 +19,16 @@ const router = createRouter({
       component: () => import("@/views/Settings.vue"),
     },
     {
+      path: "/docs",
+      name: "Docs",
+      component: () => import("@/views/Docs.vue"),
+    },
+    {
+      path: "/report",
+      name: "ReportIssue",
+      component: () => import("@/views/ReportIssue.vue"),
+    },
+    {
       path: "/projects/:id",
       name: "ProjectContext",
       component: () => import("@/views/projects/Layout.vue"),
