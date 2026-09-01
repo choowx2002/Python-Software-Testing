@@ -4,6 +4,7 @@ import {
   sendNotification,
 } from '@tauri-apps/plugin-notification'
 import { useUIStore } from '../stores/uiStore'
+import i18n from '../i18n'
 
 let permissionGranted: boolean | null = null
 
@@ -40,29 +41,35 @@ export async function notify(title: string, body: string) {
 }
 
 export async function notifyGenerationComplete(projectName: string, success: boolean, count: number) {
+  const t = i18n.global.t
   await notify(
-    success ? '测试生成完成' : '测试生成失败',
-    `${projectName}: ${success ? `生成了 ${count} 个测试文件` : '请查看日志了解详情'}`,
+    success ? t('notifications.generationSuccess') : t('notifications.generationFailure'),
+    success
+      ? t('notifications.generationSuccessBody', { projectName, count })
+      : t('notifications.generationFailureBody', { projectName }),
   )
 }
 
 export async function notifyCoverageComplete(projectName: string, percent: number) {
+  const t = i18n.global.t
   await notify(
-    '覆盖率分析完成',
-    `${projectName}: 总覆盖率 ${percent.toFixed(1)}%`,
+    t('notifications.coverageTitle'),
+    t('notifications.coverageBody', { projectName, percent: percent.toFixed(1) }),
   )
 }
 
 export async function notifyExecutionComplete(projectName: string, passed: number, failed: number) {
+  const t = i18n.global.t
   await notify(
-    failed > 0 ? '测试执行完成（有失败）' : '测试执行完成（全部通过）',
-    `${projectName}: ${passed} 通过, ${failed} 失败`,
+    failed > 0 ? t('notifications.executionFailTitle') : t('notifications.executionPassTitle'),
+    t('notifications.executionBody', { projectName, passed, failed }),
   )
 }
 
 export async function notifyEnvFixComplete(projectName: string) {
+  const t = i18n.global.t
   await notify(
-    '环境修复完成',
-    `${projectName}: Python 3.11 已安装，虚拟环境已重建，依赖已安装。`,
+    t('notifications.envFixTitle'),
+    t('notifications.envFixBody', { projectName }),
   )
 }
