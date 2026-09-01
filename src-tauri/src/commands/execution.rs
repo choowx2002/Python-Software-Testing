@@ -10,6 +10,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use uuid::Uuid;
 
 use super::*;
+use crate::proc::NoConsole;
 // ============================================
 // Command 1: Scan Test Files
 // ============================================
@@ -112,6 +113,7 @@ pub fn collect_test_cases(project_path: String) -> Result<Vec<TestCase>, String>
     let python = find_project_python(&project)?;
 
     let output = Command::new(&python)
+        .no_console()
         .current_dir(&project)
         .env(
             "PYTHONPATH",
@@ -430,6 +432,7 @@ pub async fn run_tests_core(
     let start = std::time::Instant::now();
 
     let mut child = match AsyncCommand::new(&interpreter)
+        .no_console()
         .current_dir(&project)
         .env(
             "PYTHONPATH",

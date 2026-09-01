@@ -11,6 +11,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use uuid::Uuid;
 
 use super::*;
+use crate::proc::NoConsole;
 
 // ============================================
 // Coverage Data Structures
@@ -105,6 +106,7 @@ pub struct CoverageErrorEvent {
 #[tauri::command]
 pub async fn check_coverage_installed(interpreter_path: String) -> Result<bool, String> {
     let output = Command::new(&interpreter_path)
+        .no_console()
         .args(["-m", "coverage", "--version"])
         .output()
         .map_err(|e| format!("Failed to execute coverage: {}", e))?;
@@ -156,6 +158,7 @@ pub async fn run_coverage(
     // ----------------------------------------
     let erase_cmd = format!("{} -m coverage erase", interpreter.display());
     let erase_output = Command::new(&interpreter)
+        .no_console()
         .args(["-m", "coverage", "erase"])
         .current_dir(&project)
         .output()
@@ -241,6 +244,7 @@ pub async fn run_coverage(
     let start = std::time::Instant::now();
 
     let mut child = match AsyncCommand::new(&interpreter)
+        .no_console()
         .current_dir(&project)
         .env("PYTHONPATH", build_python_path(&project))
         .args(&args)
@@ -353,6 +357,7 @@ pub async fn run_coverage(
     );
 
     let json_output = Command::new(&interpreter)
+        .no_console()
         .args(["-m", "coverage", "json", "-o"])
         .arg(&json_path)
         .current_dir(&project)

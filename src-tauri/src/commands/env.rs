@@ -4,6 +4,7 @@ use tokio::process::Command as AsyncCommand;
 use tauri::Emitter;
 
 use super::*;
+use crate::proc::NoConsole;
 // Command 1: Detect Python Environment
 // ============================================
 #[tauri::command]
@@ -61,6 +62,7 @@ pub async fn detect_python_env(project_path: String) -> Result<EnvDetectionResul
 
         for (cmd, args) in candidates {
             let mut command = Command::new(cmd);
+            command.no_console();
             command.args(*args).arg("--version");
 
             let Ok(output) = command.output() else {
@@ -88,7 +90,7 @@ pub async fn detect_python_env(project_path: String) -> Result<EnvDetectionResul
     // 3. Python Version (for existing venv)
     // ----------------------------------------
     let python_path = result.python_path.as_ref().unwrap();
-    if let Ok(output) = Command::new(python_path).arg("--version").output() {
+    if let Ok(output) = Command::new(python_path).no_console().arg("--version").output() {
         if output.status.success() {
             let version = if output.stdout.is_empty() {
                 String::from_utf8_lossy(&output.stderr).trim().to_string()
@@ -142,6 +144,7 @@ pub async fn detect_python_env(project_path: String) -> Result<EnvDetectionResul
 
     // 4.3 检查这些依赖在当前 Python 环境 (venv) 中的安装状态
     match Command::new(python_path)
+        .no_console()
         .args(["-m", "pip", "list", "--format=json"])
         .output()
     {
@@ -230,6 +233,7 @@ pub async fn install_dependencies(
         });
 
         let output = Command::new(&python_path)
+            .no_console()
             .args(["-m", "pip", "install", package])
             .output()
             .map_err(|e| format!("Failed to execute pip for {}: {}", package, e))?;
@@ -281,6 +285,7 @@ pub async fn check_generation_env(
     );
 
     let output = Command::new(&interpreter_path)
+        .no_console()
         .args(["-c", script])
         .output()
         .map_err(|e| format!("Failed to run python: {}", e))?;
@@ -326,6 +331,7 @@ pub async fn check_generation_env(
 fn resolve_python_311() -> Option<String> {
     // 1) py launcher
     if let Ok(output) = Command::new("py")
+        .no_console()
         .args(["-3.11", "-c", "import sys; print(sys.executable)"])
         .output()
     {
@@ -374,6 +380,7 @@ pub async fn fix_python_env(
     if resolve_python_311().is_none() {
         emit("winget", "running", "Installing Python 3.11 via winget...");
         let output = AsyncCommand::new("winget")
+            .no_console()
             .args([
                 "install",
                 "-e",
@@ -418,6 +425,7 @@ pub async fn fix_python_env(
     // 3) 用 3.11 创建新 venv
     emit("venv", "running", "Creating .venv with Python 3.11...");
     let output = AsyncCommand::new(&py311)
+        .no_console()
         .args(["-m", "venv", ".venv"])
         .current_dir(&root)
         .output()
@@ -444,6 +452,7 @@ pub async fn fix_python_env(
     emit("deps", "running", "Installing project dependencies...");
     let req = root.join("requirements.txt");
     let mut pip = AsyncCommand::new(&venv_python);
+    pip.no_console();
     pip.arg("-m").arg("pip").arg("install");
     if req.exists() {
         pip.args(["-r", "requirements.txt"]);
@@ -545,6 +554,7 @@ pub async fn clone_repository(
     }
 
     let output = AsyncCommand::new("git")
+        .no_console()
         .args(["clone", url])
         .current_dir(&target)
         .output()
@@ -589,7 +599,7 @@ pub async fn create_virtual_env(
         };
 
         if test_python.exists() {
-            if let Ok(output) = Command::new(&test_python).arg("--version").output() {
+            if let Ok(output) = Command::new(&test_python).no_console().arg("--version").output() {
                 if output.status.success() {
                     // 已经是一个有效的虚拟环境，直接返回成功，避免重复创建
                     return Ok(venv_dir.to_string_lossy().to_string());
@@ -602,6 +612,7 @@ pub async fn create_virtual_env(
 
     // 执行创建命令
     let output = Command::new(&python_executable)
+        .no_console()
         .current_dir(&path)
         .args(["-m", "venv", ".venv"])
         .output()
@@ -645,7 +656,12 @@ fn find_interpreter_for_project(project: &Path) -> Option<String> {
         &[("python3", &[]), ("python", &[])]
     };
     for (cmd, args) in candidates {
-        if let Ok(output) = Command::new(cmd).args(*args).arg("--version").output() {
+        if let Ok(output) = Command::new(cmd)
+            .no_console()
+            .args(*args)
+            .arg("--version")
+            .output()
+        {
             if output.status.success() {
                 return Some(cmd.to_string());
             }

@@ -10,6 +10,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use uuid::Uuid;
 
 use super::*;
+use crate::proc::NoConsole;
 // ============================================
 // Generate Tests Data Structures
 // ============================================
@@ -370,6 +371,7 @@ pub async fn generate_tests(
 
         // Run Pynguin
         let mut child = match AsyncCommand::new(&interpreter)
+            .no_console()
             .current_dir(&project)
             .env("PYTHONPATH", build_python_path(&project))
             .env("PYNGUIN_DANGER_AWARE", "1")
@@ -453,6 +455,7 @@ pub async fn generate_tests(
         if success {
             if let Some(rename_script) = locate_generation_rename_script() {
                 let rename_result = AsyncCommand::new(&interpreter)
+                    .no_console()
                     .current_dir(&project)
                     .args([
                         rename_script.to_string_lossy().to_string(),

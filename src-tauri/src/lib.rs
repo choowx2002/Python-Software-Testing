@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod perf;
+mod proc;
 mod state;
 
 use tauri::Manager;

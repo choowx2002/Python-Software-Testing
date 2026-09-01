@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::process::Command;
 
+use crate::proc::NoConsole;
+
 /// 读取文本文件内容（带大小限制，用于生成测试预览）
 #[tauri::command]
 pub async fn read_text_file(path: String) -> Result<String, String> {
@@ -165,6 +167,7 @@ pub async fn open_file(
         #[cfg(target_os = "windows")]
         {
             Command::new(program)
+                .no_console()
                 .args(args)
                 .spawn()
                 .map_err(|e| format!("Failed to launch editor '{}': {}", program, e))?;
@@ -192,6 +195,7 @@ pub async fn open_file(
     #[cfg(target_os = "windows")]
     {
         Command::new("cmd")
+            .no_console()
             .args(["/C", "start", "", &path])
             .spawn()
             .map_err(|e| format!("Failed to open file: {}", e))?;

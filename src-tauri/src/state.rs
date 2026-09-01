@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Mutex;
 
+use crate::proc::NoConsole;
+
 /// 全局应用状态：跟踪所有运行中的子进程（run_id → pid）
 #[derive(Default)]
 pub struct AppState {
@@ -34,6 +36,7 @@ pub fn terminate_pid(pid: u32, force: bool) -> bool {
     #[cfg(windows)]
     {
         let mut cmd = Command::new("taskkill");
+        cmd.no_console();
         if force {
             cmd.args(["/F", "/PID", &pid.to_string()]);
         } else {
@@ -57,6 +60,7 @@ pub fn process_alive(pid: u32) -> bool {
     #[cfg(windows)]
     {
         Command::new("tasklist")
+            .no_console()
             .args(["/FI", &format!("PID eq {}", pid)])
             .output()
             .map(|o| !String::from_utf8_lossy(&o.stdout).contains("No tasks"))
