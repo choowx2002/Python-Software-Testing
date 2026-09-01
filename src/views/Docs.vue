@@ -19,19 +19,20 @@ import {
 import AppTooltip from "../components/ui/AppTooltip.vue";
 
 const router = useRouter();
-const { t } = useI18n();
+const { t, tm } = useI18n();
 
 type Shortcut = { keys: string; desc: string };
 type TroubleRow = { issue: string; fix: string };
 
-const quickStartSteps = computed<string[]>(() => t("docs.quickStart.steps") as unknown as string[]);
-const executePoints = computed<string[]>(() => t("docs.modules.execute.points") as unknown as string[]);
-const generatePoints = computed<string[]>(() => t("docs.modules.generate.points") as unknown as string[]);
-const coveragePoints = computed<string[]>(() => t("docs.modules.coverage.points") as unknown as string[]);
-const globalShortcuts = computed<Shortcut[]>(() => t("docs.shortcuts.global") as unknown as Shortcut[]);
-const projectShortcuts = computed<Shortcut[]>(() => t("docs.shortcuts.project") as unknown as Shortcut[]);
-const troubleRows = computed<TroubleRow[]>(() => t("docs.troubleshooting.rows") as unknown as TroubleRow[]);
-const systemPoints = computed<string[]>(() => t("docs.system.points") as unknown as string[]);
+// 数组/对象消息必须用 tm()（t() 只接受字符串，遇数组会回退成键名字符串）
+const quickStartSteps = computed<string[]>(() => tm("docs.quickStart.steps") as unknown as string[]);
+const executePoints = computed<string[]>(() => tm("docs.modules.execute.points") as unknown as string[]);
+const generatePoints = computed<string[]>(() => tm("docs.modules.generate.points") as unknown as string[]);
+const coveragePoints = computed<string[]>(() => tm("docs.modules.coverage.points") as unknown as string[]);
+const globalShortcuts = computed<Shortcut[]>(() => tm("docs.shortcuts.global") as unknown as Shortcut[]);
+const projectShortcuts = computed<Shortcut[]>(() => tm("docs.shortcuts.project") as unknown as Shortcut[]);
+const troubleRows = computed<TroubleRow[]>(() => tm("docs.troubleshooting.rows") as unknown as TroubleRow[]);
+const systemPoints = computed<string[]>(() => tm("docs.system.points") as unknown as string[]);
 
 const tocItems = computed(() => [
   { href: "#quick-start", label: t("docs.quickStart.title"), icon: ListChecks },
@@ -40,6 +41,17 @@ const tocItems = computed(() => [
   { href: "#troubleshooting", label: t("docs.troubleshooting.title"), icon: HelpCircle },
   { href: "#system", label: t("docs.system.title"), icon: LifeBuoy },
 ]);
+
+/**
+ * 目录跳转：用 scrollIntoView 而非原生 <a href="#id">
+ * —— vue-router 会拦截同源锚点点击并 preventDefault，且项目未配置 scrollBehavior，
+ * 原生锚点滚动会被吞掉（hash 变了但页面不滚动）。
+ * scrollIntoView 会滚动所有可滚动祖先（含页面自己的 overflow-y-auto 容器），
+ * 并遵循目标元素的 scroll-mt-20 边距。
+ */
+function scrollToSection(href: string) {
+  document.querySelector(href)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
 </script>
 
 <template>
@@ -69,15 +81,16 @@ const tocItems = computed(() => [
         <!-- 左侧锚点目录 -->
         <nav class="sticky top-6 hidden h-fit w-44 shrink-0 space-y-0.5 lg:block">
           <p class="section-label mb-1.5">{{ t("docs.title") }}</p>
-          <a
+          <button
             v-for="item in tocItems"
             :key="item.href"
-            :href="item.href"
-            class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
+            type="button"
+            class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
+            @click="scrollToSection(item.href)"
           >
             <component :is="item.icon" class="h-3.5 w-3.5 shrink-0" />
             <span class="truncate">{{ item.label }}</span>
-          </a>
+          </button>
         </nav>
 
         <!-- 右侧内容 -->

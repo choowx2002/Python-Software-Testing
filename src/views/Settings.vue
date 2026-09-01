@@ -24,7 +24,7 @@ import { setLocale } from "../i18n";
 
 const router = useRouter();
 const uiStore = useUIStore();
-const { t, locale } = useI18n();
+const { t, tm, locale } = useI18n();
 
 // ---------- 通用：语言 ----------
 const currentLocale = computed(() => locale.value);
@@ -102,7 +102,7 @@ async function clearAllHistory() {
 
 // ---------- 关于 ----------
 const version = ref("0.1.0");
-const stackItems = computed(() => (t("about.stack") as unknown as string[]) ?? []);
+const stackItems = computed(() => (tm("about.stack") as unknown as string[]) ?? []);
 
 onMounted(async () => {
   try {
