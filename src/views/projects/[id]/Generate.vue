@@ -7,7 +7,7 @@
  *   ③ 完成：结论横幅 + 生成文件列表 + 行内操作
  * 所有业务逻辑（Pynguin 事件流 / 源扫描 / 历史持久化）保持不变。
  */
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useRoute, useRouter } from "vue-router";
@@ -362,6 +362,13 @@ async function installMissingAndGenerate() {
 const currentRunId = ref<string | null>(null);
 const currentFile = ref<string | null>(null);
 
+/* 主内容滚动列：运行开始/完成时自动滚到底部以露出 result 区 */
+const mainScrollEl = ref<HTMLElement | null>(null);
+function scrollMainToBottom() {
+  const el = mainScrollEl.value;
+  if (el) el.scrollTop = el.scrollHeight;
+}
+
 const totalFiles = ref(0);
 const completedFiles = ref(0);
 const elapsedTime = ref(0);
@@ -632,6 +639,7 @@ async function setupGenerationListeners() {
 
       setWinStatus(t("generate.status.generating"));
       void setTaskProgress(0, event.payload.totalFiles, "indeterminate");
+      void nextTick(scrollMainToBottom);
     },
   );
 
@@ -705,6 +713,9 @@ async function setupGenerationListeners() {
 
       // 生成结束后刷新环境状态（用户可能中途修复了依赖）
       void refreshGenEnv();
+
+      await nextTick();
+      scrollMainToBottom();
     },
   );
 }
@@ -1097,7 +1108,7 @@ function onFocusSearch() {
 <template>
   <div class="flex h-full min-h-0 gap-4 p-5">
     <!-- 左：主内容 -->
-    <div class="flex min-w-0 flex-1 flex-col gap-4 overflow-auto">
+    <div ref="mainScrollEl" class="flex min-w-0 flex-1 flex-col gap-4 overflow-auto">
     <!-- 页头 -->
     <header class="flex items-start justify-between gap-4">
       <div class="min-w-0">
