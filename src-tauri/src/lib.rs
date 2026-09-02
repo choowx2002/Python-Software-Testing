@@ -93,6 +93,7 @@ pub fn run() {
             commands::coverage::export_coverage_report,
             commands::env::detect_python_env,
             commands::env::check_generation_env,
+            commands::env::scan_missing_imports,
             commands::env::fix_python_env,
             commands::env::install_dependencies,
             commands::env::validate_project_directory,

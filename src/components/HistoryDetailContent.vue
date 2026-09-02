@@ -279,6 +279,8 @@ function statusColor(status: string): string {
       return "text-amber-600";
     case "xfailed":
       return "text-violet-600";
+    case "xpassed":
+      return "text-sky-600";
     default:
       return "text-zinc-500";
   }
@@ -289,6 +291,7 @@ function statusIcon(status: string) {
   if (status === "failed" || status === "error") return XCircle;
   if (status === "skipped") return Clock3;
   if (status === "xfailed") return AlertCircle;
+  if (status === "xpassed") return CheckCircle2;
   return AlertCircle;
 }
 
@@ -304,6 +307,8 @@ function statusLabel(status: string): string {
       return t("execute.results.skipped");
     case "xfailed":
       return t("execute.results.xfailed");
+    case "xpassed":
+      return t("execute.results.xpassed");
     default:
       return status;
   }

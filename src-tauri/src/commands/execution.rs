@@ -521,6 +521,8 @@ pub async fn run_tests_core(
     };
 
     let passed = results.iter().filter(|r| r.status == "passed").count();
+    // strict-xfail 意外通过（xpassed）不算失败；作为通过统计
+    let xpassed = results.iter().filter(|r| r.status == "xpassed").count();
     let failed = results.iter().filter(|r| r.status == "failed" || r.status == "error").count();
     // xfail 在 junit 中表现为 skipped 子类，汇总时并入 skipped，保持与 pytest 报告一致
     let skipped = results
@@ -528,14 +530,18 @@ pub async fn run_tests_core(
         .filter(|r| r.status == "skipped" || r.status == "xfailed")
         .count();
 
+    // 只有 [XPASS(strict)]（无真实失败/错误）时，pytest 退出码非 0 但应视为通过
+    let success = status.success()
+        || (!results.is_empty() && failed == 0 && xpassed > 0);
+
     let _ = app_handle.emit(
         "test-finished",
         TestFinishedEvent {
             run_id: run_id.clone(),
-            success: status.success(),
+            success,
             exit_code: status.code(),
             duration,
-            passed,
+            passed: passed + xpassed,
             failed,
             skipped,
             results,
@@ -572,10 +578,19 @@ pub async fn cancel_run(state: tauri::State<'_, AppState>, run_id: String) -> Re
 
     if let Some(pid) = pid {
         if process_alive(pid) {
-            let _ = terminate_pid(pid, false);
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            if process_alive(pid) {
+            #[cfg(target_os = "windows")]
+            {
+                // Windows 无真正的 SIGTERM，且必须连进程树一起杀
+                // （否则 pynguin/pytest 的子 worker 会继续攥着输出管道）。
                 let _ = terminate_pid(pid, true);
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = terminate_pid(pid, false);
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                if process_alive(pid) {
+                    let _ = terminate_pid(pid, true);
+                }
             }
         }
     }
@@ -623,7 +638,11 @@ pub fn parse_junit_results_from_str(content: &str) -> Result<Vec<TestResult>, St
                 if event.name().as_ref() == b"failure" =>
             {
                 if let Some(test) = current.as_mut() {
-                    test.status = "failed".to_string();
+                    test.status = if is_xpass_strict(event) {
+                        "xpassed".to_string()
+                    } else {
+                        "failed".to_string()
+                    };
                 }
                 current_failure = Some(String::new());
             }
@@ -659,7 +678,13 @@ pub fn parse_junit_results_from_str(content: &str) -> Result<Vec<TestResult>, St
                 if event.name().as_ref() == b"failure" =>
             {
                 if let Some(test) = current.as_mut() {
-                    test.status = "failed".to_string();
+                    test.status = if is_xpass_strict(event) {
+                        "xpassed".to_string()
+                    } else {
+                        "failed".to_string()
+                    };
+                    let msg = attr_value(event, b"message").unwrap_or_default();
+                    test.error_message = Some(msg);
                 }
             }
 
@@ -686,6 +711,16 @@ pub fn parse_junit_results_from_str(content: &str) -> Result<Vec<TestResult>, St
             {
                 if let Some(test) = current.as_mut() {
                     test.error_message = current_failure.take();
+                    // strict xfail 意外通过：pytest 记为 failure，正文以 [XPASS(strict)] 开头
+                    if test.status == "failed"
+                        && test
+                            .error_message
+                            .as_deref()
+                            .map(|m| m.contains("[XPASS(strict)]"))
+                            .unwrap_or(false)
+                    {
+                        test.status = "xpassed".to_string();
+                    }
                 }
             }
 
@@ -767,6 +802,14 @@ fn attr_value(event: &quick_xml::events::BytesStart, key: &[u8]) -> Option<Strin
         .flatten()
         .find(|a| a.key.as_ref() == key)
         .map(|a| String::from_utf8_lossy(&a.value).to_string())
+}
+
+/// strict xfail 意外通过时，pytest 在 JUnit 里以 failure 形式输出，
+/// message/正文以 `[XPASS(strict)]` 开头 —— 应在解析阶段归为独立状态 "xpassed"。
+fn is_xpass_strict(event: &quick_xml::events::BytesStart) -> bool {
+    attr_value(event, b"message")
+        .map(|m| m.contains("[XPASS(strict)]"))
+        .unwrap_or(false)
 }
 
 /// 处理 `<skipped>` 元素：pytest 的 xfail 会以 `<skipped type="pytest.xfail">` 形式出现，
@@ -860,5 +903,39 @@ mod tests {
         assert_eq!(results[0].status, "xfailed");
         assert_eq!(results[0].skip_reason.as_deref(), Some("known issue #123"));
         assert_eq!(results[0].line, Some(21));
+    }
+
+    #[test]
+    fn junit_maps_strict_xpass_to_xpassed() {
+        let xml = r#"<?xml version="1.0"?>
+<testsuite>
+  <testcase classname="test_core_db" name="test_TaskDatabase_0" file="tests/generated/core_db/test_core_db.py" time="0.01">
+    <failure message="[XPASS(strict)]">[XPASS(strict)] marker outdated
+  assert 1 == 1
+</failure>
+  </testcase>
+</testsuite>"#;
+        let results = parse_junit_results_from_str(xml).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, "xpassed");
+        let msg = results[0].error_message.as_deref().unwrap_or_default();
+        assert!(msg.contains("[XPASS(strict)]"));
+    }
+
+    #[test]
+    fn junit_keeps_real_failure_as_failed() {
+        let xml = r#"<?xml version="1.0"?>
+<testsuite>
+  <testcase classname="test_user" name="test_a" file="tests/test_user.py" time="0.01">
+    <failure>assert 1 == 2</failure>
+  </testcase>
+</testsuite>"#;
+        let results = parse_junit_results_from_str(xml).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, "failed");
+        assert_eq!(
+            results[0].error_message.as_deref(),
+            Some("assert 1 == 2")
+        );
     }
 }

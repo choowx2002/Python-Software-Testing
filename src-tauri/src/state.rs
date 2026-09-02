@@ -38,7 +38,9 @@ pub fn terminate_pid(pid: u32, force: bool) -> bool {
         let mut cmd = Command::new("taskkill");
         cmd.no_console();
         if force {
-            cmd.args(["/F", "/PID", &pid.to_string()]);
+            // /T：递归终止整个进程树（父进程 + 其派生的子/孙进程一起杀），
+            // 否则 pynguin/pytest 的子 worker 会继续攥着管道，导致 Stop 迟迟不生效
+            cmd.args(["/F", "/T", "/PID", &pid.to_string()]);
         } else {
             cmd.args(["/PID", &pid.to_string()]);
         }

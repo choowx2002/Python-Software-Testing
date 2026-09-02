@@ -267,6 +267,107 @@ pub async fn install_dependencies(
 }
 
 // ============================================
+// 静态 import 扫描：找出项目源码里引用的、venv 中未安装的第三方包
+// ============================================
+
+/// files = Some(相对路径列表) 时只扫这些文件；None 时扫整个项目
+/// （自动排除 .venv / venv / tests / pynguin-report 等）。
+/// 判定规则：顶层 import 的模块根，若 `importlib.util.find_spec` 找不到，
+/// 说明不是 stdlib/本地模块/已装包 → 需要 pip 安装。
+#[tauri::command]
+pub async fn scan_missing_imports(
+    project_path: String,
+    interpreter_path: String,
+    files: Option<Vec<String>>,
+) -> Result<Vec<String>, String> {
+    let root = PathBuf::from(&project_path);
+    if !root.is_dir() {
+        return Err(format!("Project directory not found: {}", project_path));
+    }
+
+    let script = r#"
+import ast, importlib.util, json, os, sys
+
+root = sys.argv[1]
+raw_files = sys.argv[2:]
+
+if raw_files:
+    files = [os.path.join(root, fp.replace("/", os.sep)) for fp in raw_files]
+else:
+    files = []
+    skip_dirs = {
+        ".venv", "venv", "__pycache__", "pynguin-report",
+        "tests", ".git", ".idea", ".vscode", "node_modules",
+    }
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs and not d.startswith(".")]
+        for fn in filenames:
+            if fn.endswith(".py"):
+                files.append(os.path.join(dirpath, fn))
+
+candidates = set()
+for fp in files:
+    if not os.path.isfile(fp):
+        continue
+    try:
+        with open(fp, "r", encoding="utf-8-sig") as fh:
+            source = fh.read()
+        tree = ast.parse(source)
+    except Exception:
+        continue
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root_name = alias.name.split(".")[0]
+                if root_name:
+                    candidates.add(root_name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0 and node.module:
+                root_name = node.module.split(".")[0]
+                if root_name:
+                    candidates.add(root_name)
+
+missing = []
+for name in sorted(candidates):
+    if name.startswith("_"):
+        continue
+    try:
+        spec = importlib.util.find_spec(name)
+        ok = spec is not None
+    except Exception:
+        ok = False
+    if not ok:
+        missing.append(name)
+
+print(json.dumps(missing))
+"#;
+
+    let mut cmd = Command::new(&interpreter_path);
+    cmd.no_console();
+    cmd.arg("-c").arg(script).arg(&root);
+    if let Some(list) = &files {
+        for f in list {
+            cmd.arg(f);
+        }
+    }
+    cmd.current_dir(&root).env("PYTHONPATH", build_python_path(&root));
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to run import scan: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse import scan result: {}", e))
+}
+
+// ============================================
 // 生成环境健康检查（Python / pynguin / bytecode 版本）
 // 用于 Generate 页提前提示已知兼容性问题
 // ============================================
@@ -327,12 +428,44 @@ pub async fn check_generation_env(
 // 一键修复生成环境：安装 Python 3.11 → 重建 venv → 装依赖 → 更新项目
 // ============================================
 
-/// 定位可用的 Python 3.11 解释器（py launcher → 已知安装路径）
+/// 定位可用的 Python 3.11 解释器
 fn resolve_python_311() -> Option<String> {
-    // 1) py launcher
-    if let Ok(output) = Command::new("py")
+    // 1) Windows py launcher / 常见安装路径
+    if cfg!(target_os = "windows") {
+        if let Ok(output) = Command::new("py")
+            .no_console()
+            .args(["-3.11", "-c", "import sys; print(sys.executable)"])
+            .output()
+        {
+            if output.status.success() {
+                let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !s.is_empty() {
+                    return Some(s);
+                }
+            }
+        }
+        for base in ["LOCALAPPDATA", "PROGRAMFILES"] {
+            if let Some(dir) = std::env::var_os(base) {
+                let p = if base == "LOCALAPPDATA" {
+                    PathBuf::from(dir)
+                        .join("Programs")
+                        .join("Python")
+                        .join("Python311")
+                        .join("python.exe")
+                } else {
+                    PathBuf::from(dir).join("Python311").join("python.exe")
+                };
+                if p.exists() {
+                    return Some(p.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+
+    // 2) Unix / PATH 中的 python3.11
+    if let Ok(output) = Command::new("python3.11")
         .no_console()
-        .args(["-3.11", "-c", "import sys; print(sys.executable)"])
+        .args(["-c", "import sys; print(sys.executable)"])
         .output()
     {
         if output.status.success() {
@@ -340,17 +473,6 @@ fn resolve_python_311() -> Option<String> {
             if !s.is_empty() {
                 return Some(s);
             }
-        }
-    }
-    // 2) 已知的 per-user 安装路径
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        let p = PathBuf::from(local)
-            .join("Programs")
-            .join("Python")
-            .join("Python311")
-            .join("python.exe");
-        if p.exists() {
-            return Some(p.to_string_lossy().to_string());
         }
     }
     None
@@ -376,32 +498,41 @@ pub async fn fix_python_env(
         );
     };
 
-    // 1) 定位 Python 3.11；缺失则用 winget 静默安装
+    // 1) 定位 Python 3.11；缺失时 Windows 用 winget 静默安装，其它平台给出安装指引
     if resolve_python_311().is_none() {
-        emit("winget", "running", "Installing Python 3.11 via winget...");
-        let output = AsyncCommand::new("winget")
-            .no_console()
-            .args([
-                "install",
-                "-e",
-                "--id",
-                "Python.Python.3.11",
-                "--silent",
-                "--accept-package-agreements",
-                "--accept-source-agreements",
-            ])
-            .output()
-            .await
-            .map_err(|e| format!("Failed to run winget: {}. Please install Python 3.11 manually from python.org.", e))?;
+        if cfg!(target_os = "windows") {
+            emit("winget", "running", "Installing Python 3.11 via winget...");
+            let output = AsyncCommand::new("winget")
+                .no_console()
+                .args([
+                    "install",
+                    "-e",
+                    "--id",
+                    "Python.Python.3.11",
+                    "--silent",
+                    "--accept-package-agreements",
+                    "--accept-source-agreements",
+                ])
+                .output()
+                .await
+                .map_err(|e| format!("Failed to run winget: {}. Please install Python 3.11 manually from python.org.", e))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!(
-                "Failed to install Python 3.11 via winget: {}. Please install it manually from python.org.",
-                stderr.trim()
-            ));
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(format!(
+                    "Failed to install Python 3.11 via winget: {}. Please install it manually from python.org.",
+                    stderr.trim()
+                ));
+            }
+            emit("winget", "success", "Python 3.11 installed.");
+        } else {
+            return Err(
+                "Python 3.11 is required (Pynguin 0.43+ is incompatible with Python 3.12+). \
+                 Please install python3.11 (e.g. `sudo apt install python3.11` / `brew install python@3.11` \
+                 or via python.org), then retry."
+                    .to_string(),
+            );
         }
-        emit("winget", "success", "Python 3.11 installed.");
     } else {
         emit("winget", "success", "Python 3.11 already installed.");
     }

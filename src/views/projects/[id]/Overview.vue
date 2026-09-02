@@ -14,6 +14,7 @@ import { Download, Gauge, Loader2, Play, WandSparkles, Wrench } from "@lucide/vu
 import { useProjectStore } from "../../../stores/projectStore";
 import AppCard from "../../../components/ui/AppCard.vue";
 import AppButton from "../../../components/ui/AppButton.vue";
+import AppConfirmModal from "../../../components/ui/AppConfirmModal.vue";
 import StatusPill from "../../../components/ui/StatusPill.vue";
 
 const route = useRoute();
@@ -50,11 +51,32 @@ async function detectEnv() {
   envError.value = false;
   try {
     env.value = await invoke<EnvResult>("detect_python_env", { projectPath: project.path });
+    await mergeMissingImports();
   } catch (error) {
     console.error("[Overview] detect_python_env failed:", error);
     envError.value = true;
   } finally {
     envLoading.value = false;
+  }
+}
+
+/** 静态 import 扫描（requirements.txt 之外的第三方依赖，如 numpy） */
+async function mergeMissingImports() {
+  const project = currentProject.value;
+  const current = env.value;
+  if (!project?.path || !current?.pythonPath) return;
+  try {
+    const missing = await invoke<string[]>("scan_missing_imports", {
+      projectPath: project.path,
+      interpreterPath: current.pythonPath,
+    });
+    for (const name of missing) {
+      if (!current.dependencies.some((d) => d.name === name)) {
+        current.dependencies.push({ name, installed: false, version: null });
+      }
+    }
+  } catch (error) {
+    console.error("[Overview] scan_missing_imports failed:", error);
   }
 }
 
@@ -70,6 +92,20 @@ watch(
 
 const missingDeps = computed(() =>
   (env.value?.dependencies ?? []).filter((d) => !d.installed),
+);
+
+/** 当前 Python 是否为 3.11（Pynguin 0.43+ 兼容版本） */
+const isPython311 = computed(() =>
+  (env.value?.pythonVersion ?? "").startsWith("Python 3.11"),
+);
+
+/** venv 已存在但建在非 3.11 上 → 建议重建 */
+const venvNeedsRebuild = computed(() =>
+  Boolean(
+    env.value?.venvExists &&
+      env.value?.pythonVersion &&
+      !isPython311.value,
+  ),
 );
 
 /** idle(检测中/无数据) / Ready / Warning / Failed */
@@ -100,7 +136,9 @@ const envStatusLabel = computed(() => {
 const envFixing = ref(false);
 const envFixError = ref<string | null>(null);
 const envFixNote = ref<string | null>(null);
+const showRebuildConfirm = ref(false);
 let unlistenInstall: UnlistenFn | undefined;
+let unlistenEnvFix: UnlistenFn | undefined;
 
 /** 订阅 pip 安装进度（install_step 事件），仅用于沉浸式提示 */
 async function subscribeInstallStep() {
@@ -118,26 +156,44 @@ async function subscribeInstallStep() {
   );
 }
 
+/** 一键修复（fix_python_env）的阶段性提示：winget/venv/deps/db/done */
+async function subscribeEnvFixStep() {
+  unlistenEnvFix?.();
+  unlistenEnvFix = await listen<{ stage: string; status: string }>(
+    "env-fix-step",
+    (event) => {
+      const { stage, status } = event.payload;
+      if (status === "success") {
+        envFixNote.value = null;
+        return;
+      }
+      if (stage === "winget") envFixNote.value = t("overview.envStageWinget");
+      else if (stage === "venv") envFixNote.value = t("overview.envStageVenv");
+      else if (stage === "deps") envFixNote.value = t("overview.envStageDeps");
+      else if (stage === "db") envFixNote.value = t("overview.envStageDb");
+    },
+  );
+}
+
 onBeforeUnmount(() => {
   unlistenInstall?.();
+  unlistenEnvFix?.();
 });
 
-/** 重建虚拟环境（用检测到的 Python），随后补装缺失依赖，最后重新探测 */
-async function createEnv() {
+/** 确保 Python 3.11 并用它（重新）创建 .venv，随后补装剩余缺失依赖并重探测 */
+async function runEnvFix() {
   const project = currentProject.value;
-  const py = env.value?.pythonPath;
-  if (!project?.path || !py || envFixing.value) return;
+  if (!project?.path || envFixing.value) return;
 
   envFixing.value = true;
   envFixError.value = null;
   envFixNote.value = null;
-  await subscribeInstallStep();
+  await Promise.all([subscribeInstallStep(), subscribeEnvFixStep()]);
   try {
-    await invoke("create_virtual_env", {
+    await invoke("fix_python_env", {
       projectPath: project.path,
-      pythonExecutable: py,
+      projectId: project.id,
     });
-    // 重新探测，拿到新 venv 的解释器与最新依赖状态
     await detectEnv();
     if (missingDeps.value.length) {
       await invoke("install_dependencies", {
@@ -147,14 +203,27 @@ async function createEnv() {
       await detectEnv();
     }
   } catch (error) {
-    console.error("[Overview] create_virtual_env failed:", error);
+    console.error("[Overview] fix_python_env failed:", error);
     envFixError.value = error instanceof Error ? error.message : String(error);
   } finally {
     envFixing.value = false;
     envFixNote.value = null;
     unlistenInstall?.();
     unlistenInstall = undefined;
+    unlistenEnvFix?.();
+    unlistenEnvFix = undefined;
   }
+}
+
+/** 无 venv：创建（优先用 Python 3.11） */
+async function createEnv() {
+  await runEnvFix();
+}
+
+/** venv 存在但非 3.11：确认后重建 */
+async function rebuildVenv311() {
+  showRebuildConfirm.value = false;
+  await runEnvFix();
 }
 
 /** 仅补装缺失依赖（venv 已存在时） */
@@ -422,6 +491,15 @@ function goTo(name: "ProjectGenerate" | "ProjectExecute" | "ProjectCoverage") {
         <template v-else-if="env">
           <div class="space-y-2.5 text-xs">
             <div class="flex items-center justify-between gap-2">
+              <span class="text-zinc-500">{{ t("overview.python") }}</span>
+              <span
+                class="font-mono"
+                :class="isPython311 ? 'text-emerald-600' : 'text-amber-600'"
+              >
+                {{ env.pythonVersion ?? "—" }}
+              </span>
+            </div>
+            <div class="flex items-center justify-between gap-2">
               <span class="text-zinc-500">{{ t("overview.venv") }}</span>
               <span class="font-mono" :class="env.venvExists ? 'text-emerald-600' : 'text-amber-600'">
                 {{ env.venvExists ? t("overview.venvActive") : t("overview.venvMissing") }}
@@ -440,9 +518,12 @@ function goTo(name: "ProjectGenerate" | "ProjectExecute" | "ProjectCoverage") {
                 }}
               </span>
             </div>
+            <p v-if="venvNeedsRebuild" class="text-[11px] leading-4 text-amber-600">
+              {{ t("overview.venvNot311Hint") }}
+            </p>
           </div>
 
-          <!-- 环境修复（无 venv 重建 / 缺依赖补装） -->
+          <!-- 环境修复（无 venv 创建 / 非 3.11 重建 / 缺依赖补装） -->
           <div v-if="envFixing" class="mt-3 space-y-1">
             <div class="flex items-center gap-2 text-xs font-medium text-brand-600">
               <Loader2 class="h-3.5 w-3.5 animate-spin" />
@@ -458,30 +539,34 @@ function goTo(name: "ProjectGenerate" | "ProjectExecute" | "ProjectCoverage") {
             <AppButton
               variant="secondary"
               size="sm"
-              @click="env.venvExists ? installDeps() : createEnv()"
+              @click="env.venvExists && !venvNeedsRebuild ? installDeps() : runEnvFix()"
             >
               {{ t("common.retry") }}
             </AppButton>
           </div>
 
-          <div v-else class="mt-3 space-y-1.5">
-            <AppButton
-              v-if="!env.venvExists"
-              variant="primary"
-              size="sm"
-              @click="createEnv"
-            >
+          <div v-else class="mt-3 flex flex-wrap items-center gap-2">
+            <AppButton v-if="!env.venvExists" variant="primary" size="sm" @click="createEnv">
               <Wrench class="h-3.5 w-3.5" />
               {{ t("overview.createEnv") }}
             </AppButton>
             <AppButton
-              v-else-if="missingDeps.length"
+              v-if="env.venvExists && missingDeps.length"
               variant="secondary"
               size="sm"
               @click="installDeps"
             >
               <Download class="h-3.5 w-3.5" />
               {{ t("overview.installDeps") }}
+            </AppButton>
+            <AppButton
+              v-if="venvNeedsRebuild"
+              variant="secondary"
+              size="sm"
+              @click="showRebuildConfirm = true"
+            >
+              <Wrench class="h-3.5 w-3.5" />
+              {{ t("overview.rebuildVenv311") }}
             </AppButton>
           </div>
         </template>
@@ -518,5 +603,17 @@ function goTo(name: "ProjectGenerate" | "ProjectExecute" | "ProjectCoverage") {
         </div>
       </div>
     </AppCard>
+
+    <!-- 用 Python 3.11 重建 .venv（破坏性，需确认） -->
+    <AppConfirmModal
+      :open="showRebuildConfirm"
+      :title="t('overview.rebuildTitle')"
+      :description="t('overview.rebuildConfirmDesc')"
+      :confirm-label="t('overview.rebuildVenv311')"
+      :variant="'danger'"
+      :loading="envFixing"
+      @update:open="(v) => { if (!v) showRebuildConfirm = false }"
+      @confirm="rebuildVenv311"
+    />
   </div>
 </template>

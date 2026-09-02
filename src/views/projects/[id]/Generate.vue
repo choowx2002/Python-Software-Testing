@@ -17,6 +17,7 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  Download,
   Eye,
   Folder,
   FolderOpen,
@@ -183,6 +184,7 @@ const currentProject = computed(() => {
 /* -------------------------------------------------------------------------- */
 
 const isGenerating = ref(false);
+const isStopping = ref(false);
 const generationStatus = ref<GenerationStatus>("idle");
 
 const sourceFiles = ref<SourceFile[]>([]);
@@ -271,6 +273,89 @@ const isPy312Risk = computed(() => {
 async function onEnvFixed() {
   await projectStore.fetchProjects();
   void refreshGenEnv();
+  void refreshMissingImports();
+}
+
+/* 源码第三方依赖缺失检测（如 numpy）——requirements.txt 未声明也能发现 */
+const missingImports = ref<string[]>([]);
+const missingScanning = ref(false);
+const installingMissing = ref(false);
+
+/** 静态扫描当前选中源文件的缺失第三方依赖 */
+async function refreshMissingImports() {
+  const projectPath = currentProject.value?.path;
+  const interpreterPath = currentProject.value?.interpreter_path;
+  if (!projectPath || !interpreterPath) {
+    missingImports.value = [];
+    return;
+  }
+  if (selectedSourceFiles.value.length === 0) {
+    missingImports.value = [];
+    return;
+  }
+  missingScanning.value = true;
+  try {
+    const list = await invoke<string[]>("scan_missing_imports", {
+      projectPath,
+      interpreterPath,
+      files: selectedSourceFiles.value,
+    });
+    missingImports.value = list;
+  } catch (error) {
+    console.error("[Generate] scan_missing_imports failed:", error);
+  } finally {
+    missingScanning.value = false;
+  }
+}
+
+/** 把运行时暴露的缺失模块（No module named 'X'）并入列表 */
+function noteMissingModule(name: string) {
+  if (!name) return;
+  if (!missingImports.value.includes(name)) {
+    missingImports.value.push(name);
+  }
+}
+
+/** 安装缺失依赖后继续生成 */
+async function installMissingAndGenerate() {
+  const projectPath = currentProject.value?.path;
+  const interpreterPath = currentProject.value?.interpreter_path;
+  if (
+    !projectPath ||
+    !interpreterPath ||
+    !missingImports.value.length ||
+    installingMissing.value
+  ) {
+    return;
+  }
+
+  installingMissing.value = true;
+  try {
+    await invoke("install_dependencies", {
+      pythonPath: interpreterPath,
+      packages: [...missingImports.value],
+    });
+    generationOutput.value.push({
+      runId: "system",
+      stream: "stdout",
+      line: t("generate.depsInstalled", { list: missingImports.value.join(", ") }),
+      logId: logCounter++,
+    });
+    missingImports.value = [];
+    await startGeneration(projectPath, interpreterPath);
+  } catch (error) {
+    console.error("[Generate] install missing deps failed:", error);
+    generationOutput.value.push({
+      runId: "system",
+      stream: "stderr",
+      line: t("generate.depsInstallFailed", {
+        msg: error instanceof Error ? error.message : String(error),
+      }),
+      logId: logCounter++,
+    });
+  } finally {
+    installingMissing.value = false;
+  }
 }
 
 const currentRunId = ref<string | null>(null);
@@ -581,6 +666,14 @@ async function setupGenerationListeners() {
       if (generationOutput.value.length > 1000) {
         generationOutput.value.shift();
       }
+
+      // 兜底：Pynguin 报 "No module named 'X'" 时把 X 加入缺失清单，供一键安装
+      const match = /No module named '([A-Za-z_][\w]*)'/.exec(
+        event.payload.line,
+      );
+      if (match) {
+        noteMissingModule(match[1]);
+      }
     },
   );
 
@@ -590,6 +683,7 @@ async function setupGenerationListeners() {
       if (event.payload.runId !== currentRunId.value) return;
 
       isGenerating.value = false;
+      isStopping.value = false;
       generationStatus.value = event.payload.success ? "completed" : "failed";
       elapsedTime.value = event.payload.duration;
       generatedFiles.value = event.payload.generatedFiles;
@@ -597,6 +691,7 @@ async function setupGenerationListeners() {
 
       clearTaskProgress();
       resetWinStatus();
+      void refreshMissingImports();
 
       // 完成后系统通知（长任务在后台时提醒用户）
       if (currentProject.value?.name) {
@@ -714,6 +809,18 @@ async function generateTests() {
     console.error("[Generate] check_python_bom failed:", error);
   }
 
+  // 缺失第三方依赖检查（numpy 等 requirements.txt 未声明的包）
+  await refreshMissingImports();
+  if (missingImports.value.length > 0) {
+    generationOutput.value.push({
+      runId: "system",
+      stream: "stderr",
+      line: t("generate.missingDepsHint", { list: missingImports.value.join(", ") }),
+      logId: logCounter++,
+    });
+    return; // 由横幅里的"安装缺失依赖并生成"处理
+  }
+
   await startGeneration(projectPath, interpreterPath);
 }
 
@@ -768,6 +875,7 @@ async function startGeneration(projectPath: string, interpreterPath: string) {
     console.error("[Generate] Failed to start generation:", error);
 
     isGenerating.value = false;
+    isStopping.value = false;
     generationStatus.value = "failed";
     currentFile.value = null;
 
@@ -783,19 +891,22 @@ async function startGeneration(projectPath: string, interpreterPath: string) {
 }
 
 /**
- * 取消当前生成任务：调用 Rust cancel_run（SIGTERM → SIGKILL）。
+ * 取消当前生成任务：调用 Rust cancel_run（Windows 直接强杀进程树）。
  * 进程被终止后，generate_tests 会在下一轮循环检测到取消标记，
  * 发出 generation-finished（success=false），由 listener 复位 UI 状态。
+ * 点击后立即进入 "stopping" 状态，避免 UI 看起来没反应。
  */
 async function stopGeneration() {
-  if (!isGenerating.value || !currentRunId.value) {
+  if (!isGenerating.value || isStopping.value || !currentRunId.value) {
     return;
   }
 
+  isStopping.value = true;
   try {
     await invoke("cancel_run", { runId: currentRunId.value });
   } catch (error) {
     console.error("[Generate] Failed to cancel generation:", error);
+    isStopping.value = false;
   }
 }
 
@@ -808,6 +919,7 @@ function resetGenerationState() {
   generatedFiles.value = [];
   generationOutput.value = [];
   generationStatus.value = "idle";
+  isStopping.value = false;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -922,13 +1034,23 @@ watch(
     selectedSourceFiles.value = [];
     sourceSearch.value = "";
     envIssueDismissed.value = false;
+    missingImports.value = [];
 
     await scanSourceFiles();
     void refreshGenEnv();
+    void refreshMissingImports();
   },
   {
     immediate: true,
   },
+);
+
+watch(
+  selectedSourceFiles,
+  () => {
+    void refreshMissingImports();
+  },
+  { immediate: true },
 );
 
 onMounted(() => {
@@ -1345,15 +1467,38 @@ function onFocusSearch() {
           </p>
         </div>
         <div class="flex shrink-0 items-center gap-2">
-          <AppButton v-if="isGenerating" variant="danger" @click="stopGeneration">
-            <Square class="h-4 w-4" />
-            {{ t("generate.stop") }}
+          <AppButton v-if="isGenerating" variant="danger" :disabled="isStopping" @click="stopGeneration">
+            <Loader2 v-if="isStopping" class="h-4 w-4 animate-spin" />
+            <Square v-else class="h-4 w-4" />
+            {{ isStopping ? t("generate.stopping") : t("generate.stop") }}
           </AppButton>
           <AppButton v-else variant="primary" :disabled="!canGenerate" @click="generateTests">
             <WandSparkles class="h-4 w-4" />
             {{ t("generate.generateTests") }}
           </AppButton>
         </div>
+      </div>
+
+      <!-- 缺失第三方依赖（如 numpy）：先安装再生成，避免 Pynguin 加载 SUT 失败 -->
+      <div
+        v-if="missingImports.length"
+        class="flex flex-wrap items-center gap-3 border-t border-amber-200 bg-amber-50 px-5 py-3"
+      >
+        <AlertCircle class="h-4 w-4 shrink-0 text-amber-600" />
+        <div class="min-w-0 flex-1 text-xs text-amber-800">
+          <span class="font-medium">{{ t("generate.missingDepsTitle") }}</span>
+          <span class="ml-1">{{ t("generate.missingDepsBody", { list: missingImports.join(", ") }) }}</span>
+        </div>
+        <AppButton
+          variant="primary"
+          size="sm"
+          :loading="installingMissing || missingScanning"
+          :disabled="isGenerating"
+          @click="installMissingAndGenerate"
+        >
+          <Download v-if="!installingMissing" class="h-3.5 w-3.5" />
+          {{ t("generate.installAndGenerate") }}
+        </AppButton>
       </div>
 
       <!-- 进度（运行中） -->

@@ -166,7 +166,7 @@ interface TestResult {
   id: string;
   name: string;
   file: string;
-  status: "passed" | "failed" | "skipped" | "error" | "xfailed";
+  status: "passed" | "failed" | "skipped" | "error" | "xfailed" | "xpassed";
   duration: number;
   errorMessage: string | null;
   line: number | null;
@@ -470,6 +470,13 @@ const filteredResults = computed(() => {
     return testResults.value;
   }
 
+  if (resultFilter.value === "passed") {
+    // 意外通过（strict-xpass）语义上属于通过，并入 passed 筛选
+    return testResults.value.filter(
+      (result) => result.status === "passed" || result.status === "xpassed",
+    );
+  }
+
   if (resultFilter.value === "failed") {
     return testResults.value.filter(
       (result) => result.status === "failed" || result.status === "error",
@@ -490,6 +497,10 @@ const filteredResults = computed(() => {
 
 const xfailedTests = computed(() =>
   testResults.value.filter((result) => result.status === "xfailed").length,
+);
+
+const xpassedTests = computed(() =>
+  testResults.value.filter((result) => result.status === "xpassed").length,
 );
 
 const failedResults = computed(() => {
@@ -1210,6 +1221,8 @@ function resultDetailBoxClass(status: TestResult["status"]) {
       return "border-amber-200 bg-amber-50";
     case "xfailed":
       return "border-violet-200 bg-violet-50";
+    case "xpassed":
+      return "border-sky-200 bg-sky-50";
     default:
       return "border-rose-200 bg-rose-50";
   }
@@ -1222,6 +1235,8 @@ function resultDetailTextClass(status: TestResult["status"]) {
       return "text-amber-800";
     case "xfailed":
       return "text-violet-800";
+    case "xpassed":
+      return "text-sky-800";
     default:
       return "text-rose-800";
   }
@@ -1234,23 +1249,29 @@ function resultDetailTitle(status: TestResult["status"]) {
       return t("execute.results.skipDetails");
     case "xfailed":
       return t("execute.results.xfailDetails");
+    case "xpassed":
+      return t("execute.results.xpassDetails");
     default:
       return t("execute.results.failureDetails");
   }
 }
 
-/** 该结果是否有可展开的详情（failed/error 的错误信息，或 skipped/xfailed 的详情） */
+/** 该结果是否有可展开的详情（failed/error 的错误信息，或 skipped/xfailed/xpassed 的详情） */
 function hasResultDetail(result: TestResult): boolean {
   if (result.status === "failed" || result.status === "error") {
     return !!result.errorMessage;
   }
-  if (result.status === "skipped" || result.status === "xfailed") {
+  if (
+    result.status === "skipped" ||
+    result.status === "xfailed" ||
+    result.status === "xpassed"
+  ) {
     return true; // 即使无原因也展开，展示「未提供原因」与文件:行号
   }
   return false;
 }
 
-/** 展开区展示的主文本：failed/error → 错误信息；skipped → 跳过原因；xfailed → 固定解释（+原因） */
+/** 展开区展示的主文本：failed/error → 错误信息；skipped → 跳过原因；xfailed → 固定解释（+原因）；xpassed → 固定解释（+错误内容） */
 function getResultDetail(result: TestResult): string | null {
   if (result.status === "failed" || result.status === "error") {
     return result.errorMessage;
@@ -1261,6 +1282,10 @@ function getResultDetail(result: TestResult): string | null {
   if (result.status === "xfailed") {
     const fixed = t("execute.results.xfailExplanation");
     return result.skipReason ? `${fixed}\n${result.skipReason}` : fixed;
+  }
+  if (result.status === "xpassed") {
+    const fixed = t("execute.results.xpassExplanation");
+    return result.errorMessage ? `${fixed}\n${result.errorMessage}` : fixed;
   }
   return null;
 }
@@ -1280,6 +1305,9 @@ function getResultClass(status: TestResult["status"]) {
     case "xfailed":
       return "border-violet-200 bg-violet-50 text-violet-700";
 
+    case "xpassed":
+      return "border-sky-200 bg-sky-50 text-sky-700";
+
     default:
       return "border-zinc-200 bg-zinc-50 text-zinc-600";
   }
@@ -1297,6 +1325,8 @@ function getResultLabel(status: TestResult["status"]) {
       return t("execute.results.skipped");
     case "xfailed":
       return t("execute.results.xfailed");
+    case "xpassed":
+      return t("execute.results.xpassed");
     default:
       return status;
   }
@@ -1316,6 +1346,9 @@ function getResultIcon(status: TestResult["status"]) {
 
     case "xfailed":
       return AlertCircle;
+
+    case "xpassed":
+      return CheckCircle2;
 
     default:
       return AlertCircle;
@@ -1957,6 +1990,15 @@ function onFocusSearch() {
             </div>
           </div>
 
+          <!-- strict-xfail 意外通过提示 -->
+          <div
+            v-if="xpassedTests > 0"
+            class="mt-3 flex items-start gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800"
+          >
+            <AlertCircle class="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-600" />
+            <span>{{ t("execute.results.xpassSummary", { count: xpassedTests }) }}</span>
+          </div>
+
           <!-- 结果筛选 + 列表 -->
           <div v-if="testResults.length > 0" class="mt-4">
             <div class="flex items-center gap-1 border-b border-border pb-2">
@@ -1989,7 +2031,9 @@ function onFocusSearch() {
                           ? 'text-amber-500'
                           : result.status === 'xfailed'
                             ? 'text-violet-500'
-                            : 'text-rose-500'
+                            : result.status === 'xpassed'
+                              ? 'text-sky-500'
+                              : 'text-rose-500'
                     "
                   />
                   <div class="min-w-0 flex-1">
@@ -2040,7 +2084,12 @@ function onFocusSearch() {
                     </button>
                   </div>
                   <div
-                    v-if="(result.status === 'skipped' || result.status === 'xfailed') && result.line"
+                    v-if="
+                      (result.status === 'skipped' ||
+                        result.status === 'xfailed' ||
+                        result.status === 'xpassed') &&
+                      result.line
+                    "
                     class="mt-1 font-mono text-[10px]"
                     :class="resultDetailTextClass(result.status)"
                   >

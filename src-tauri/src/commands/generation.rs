@@ -1,6 +1,7 @@
 use crate::state::AppState;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use tokio::process::Command as AsyncCommand;
 use std::process::Stdio;
 use tauri::AppHandle;
@@ -401,8 +402,12 @@ pub async fn generate_tests(
 
         register_run(&app_handle, &run_id, child.id().unwrap_or(0));
 
+        // 捕获该模块完整输出，用于区分"无对象可测"与真正的失败
+        let module_output = Arc::new(Mutex::new(String::new()));
+
         let stdout_handle = app_handle.clone();
         let stdout_run_id = run_id.clone();
+        let stdout_buf = module_output.clone();
         let stdout_task = tokio::spawn(async move {
             if let Some(stdout) = stdout {
                 let reader = BufReader::new(stdout);
@@ -414,9 +419,13 @@ pub async fn generate_tests(
                         GenerationOutputEvent {
                             run_id: stdout_run_id.clone(),
                             stream: "stdout".to_string(),
-                            line,
+                            line: line.clone(),
                         },
                     );
+                    if let Ok(mut buf) = stdout_buf.lock() {
+                        buf.push_str(&line);
+                        buf.push('\n');
+                    }
                     crate::perf::record_emit(emit_start.elapsed());
                 }
             }
@@ -424,6 +433,7 @@ pub async fn generate_tests(
 
         let stderr_handle = app_handle.clone();
         let stderr_run_id = run_id.clone();
+        let stderr_buf = module_output.clone();
         let stderr_task = tokio::spawn(async move {
             if let Some(stderr) = stderr {
                 let reader = BufReader::new(stderr);
@@ -435,9 +445,13 @@ pub async fn generate_tests(
                         GenerationOutputEvent {
                             run_id: stderr_run_id.clone(),
                             stream: "stderr".to_string(),
-                            line,
+                            line: line.clone(),
                         },
                     );
+                    if let Ok(mut buf) = stderr_buf.lock() {
+                        buf.push_str(&line);
+                        buf.push('\n');
+                    }
                     crate::perf::record_emit(emit_start.elapsed());
                 }
             }
@@ -446,6 +460,11 @@ pub async fn generate_tests(
         let status = child.wait().await;
         let _ = stdout_task.await;
         let _ = stderr_task.await;
+
+        let combined_output = module_output
+            .lock()
+            .map(|b| b.clone())
+            .unwrap_or_default();
 
         let success = status.as_ref().map(|s| s.success()).unwrap_or(false);
         last_exit_code = status.as_ref().ok().and_then(|s| s.code());
@@ -540,24 +559,50 @@ pub async fn generate_tests(
         }
 
         if !success {
-            overall_success = false;
-
             if module_generated.is_empty() {
                 let stem = Path::new(rel_path)
                     .file_stem()
                     .unwrap_or_default()
                     .to_string_lossy();
 
-                module_generated.push(GeneratedFile {
-                    name: format!("test_{}.py", stem),
-                    path: String::new(),
-                    relative_path: String::new(),
-                    test_case_count: 0,
-                    status: "failed".to_string(),
-                });
+                // "SUT contains nothing we can test." 不是错误：模块没有可测对象
+                // （如纯 GUI/常量模块），视为 empty 结果，不把整次生成标为失败。
+                if combined_output.contains("SUT contains nothing we can test") {
+                    let _ = app_handle.emit(
+                        "generation-output",
+                        GenerationOutputEvent {
+                            run_id: run_id.clone(),
+                            stream: "stdout".to_string(),
+                            line: format!("\n[Empty] {} has nothing we can test — skipped", module_name),
+                        },
+                    );
+
+                    module_generated.push(GeneratedFile {
+                        name: format!("test_{}.py", stem),
+                        path: String::new(),
+                        relative_path: String::new(),
+                        test_case_count: 0,
+                        status: "empty".to_string(),
+                    });
+                } else {
+                    overall_success = false;
+                    module_generated.push(GeneratedFile {
+                        name: format!("test_{}.py", stem),
+                        path: String::new(),
+                        relative_path: String::new(),
+                        test_case_count: 0,
+                        status: "failed".to_string(),
+                    });
+                }
+            } else {
+                overall_success = false;
             }
         }
 
+        let real_files = module_generated
+            .iter()
+            .filter(|g| !g.path.is_empty())
+            .count();
         let _ = app_handle.emit(
             "generation-output",
             GenerationOutputEvent {
@@ -565,8 +610,7 @@ pub async fn generate_tests(
                 stream: "stdout".to_string(),
                 line: format!(
                     "\n[Done] {} — {} test file(s) generated\n",
-                    module_name,
-                    module_generated.len()
+                    module_name, real_files
                 ),
             },
         );
