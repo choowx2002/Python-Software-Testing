@@ -319,7 +319,7 @@ const coverageOutput = ref<CoverageOutputEvent[]>([]);
 
 const errorMessage = ref<InterpretedError | null>(null);
 
-const exporting = ref<"json" | "csv" | null>(null);
+const exporting = ref<"json" | "csv" | "md" | "html" | null>(null);
 const exportMessage = ref<string | null>(null);
 
 const currentRunId = ref<string | null>(null);
@@ -1031,7 +1031,7 @@ async function toggleDetail(path: string) {
 /* Bottom actions                                                             */
 /* -------------------------------------------------------------------------- */
 
-async function exportReport(format: "json" | "csv") {
+async function exportReport(format: "json" | "csv" | "md" | "html") {
   if (exporting.value) return;
 
   exporting.value = format;
@@ -1603,6 +1603,16 @@ function onFocusSearch() {
               @click="exportReport('json')">
               <Download class="h-3.5 w-3.5" />
               {{ t("coverage.export.json") }}
+            </AppButton>
+            <AppButton variant="secondary" size="sm" :loading="exporting === 'md'" :disabled="exporting !== null"
+              @click="exportReport('md')">
+              <Download class="h-3.5 w-3.5" />
+              {{ t("coverage.export.md") }}
+            </AppButton>
+            <AppButton variant="secondary" size="sm" :loading="exporting === 'html'" :disabled="exporting !== null"
+              @click="exportReport('html')">
+              <Download class="h-3.5 w-3.5" />
+              {{ t("coverage.export.html") }}
             </AppButton>
             <AppButton variant="ghost" size="sm" @click="openInFileManager">
               <FolderOpen class="h-3.5 w-3.5" />

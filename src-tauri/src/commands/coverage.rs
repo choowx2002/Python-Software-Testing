@@ -567,7 +567,7 @@ pub async fn export_coverage_report(
     format: String,
 ) -> Result<String, String> {
     let fmt = format.to_lowercase();
-    if fmt != "json" && fmt != "csv" {
+    if !matches!(fmt.as_str(), "json" | "csv" | "md" | "html") {
         return Err(format!("Unsupported export format: {}", format));
     }
 
@@ -587,13 +587,19 @@ pub async fn export_coverage_report(
         .map_err(|e| format!("Failed to read coverage.json: {}", e))?;
 
     let file_name = format!("coverage_report_{}.{}", project_id, fmt);
-    let filter_name = if fmt == "json" { "JSON" } else { "CSV" };
+    let (filter_name, filter_ext) = match fmt.as_str() {
+        "json" => ("JSON", "json"),
+        "csv" => ("CSV", "csv"),
+        "md" => ("Markdown", "md"),
+        "html" => ("HTML", "html"),
+        _ => unreachable!("format validated above"),
+    };
 
     let file_path = app
         .dialog()
         .file()
         .set_file_name(&file_name)
-        .add_filter(filter_name, &[fmt.as_str()])
+        .add_filter(filter_name, &[filter_ext])
         .blocking_save_file()
         .ok_or("Save dialog was cancelled")?;
 
@@ -604,10 +610,12 @@ pub async fn export_coverage_report(
             .map_err(|_| "Invalid file URL returned from save dialog".to_string())?,
     };
 
-    let output = if fmt == "json" {
-        content
-    } else {
-        coverage_json_to_csv(&content)?
+    let output = match fmt.as_str() {
+        "json" => content,
+        "csv" => coverage_json_to_csv(&content)?,
+        "md" => coverage_json_to_markdown(&content)?,
+        "html" => coverage_json_to_html(&content)?,
+        _ => unreachable!("format validated above"),
     };
 
     std::fs::write(&target, output)
@@ -800,6 +808,257 @@ fn csv_escape(field: &str) -> String {
         format!("\"{}\"", field.replace('"', "\"\""))
     } else {
         field.to_string()
+    }
+}
+
+/// 将 coverage.json 转换为 Markdown 报告（总量 + 逐文件表格）
+fn coverage_json_to_markdown(content: &str) -> Result<String, String> {
+    let (totals, files) = parse_coverage_json(content)?;
+
+    let mut out = String::new();
+    out.push_str("# Coverage Report\n\n");
+
+    out.push_str("| Metric | Value |\n|---|---|\n");
+    out.push_str(&format!(
+        "| Total coverage | {:.1}% |\n",
+        totals.percent_covered
+    ));
+    out.push_str(&format!(
+        "| Statements | {}/{} covered |\n",
+        totals.covered_statements, totals.total_statements
+    ));
+    if let Some(branch) = totals.branch_percent() {
+        out.push_str(&format!(
+            "| Branches | {}/{} covered |\n",
+            totals.covered_branches.unwrap_or(0),
+            totals.num_branches.unwrap_or(0)
+        ));
+        out.push_str(&format!("| Branch coverage | {:.1}% |\n", branch));
+    }
+    out.push('\n');
+
+    out.push_str("| File | Covered | Missing | Statements | Coverage |\n");
+    out.push_str("|---|---:|---:|---:|---:|\n");
+    for file in &files {
+        let covered = file.executed_lines.len();
+        let missing = file.missing_lines.len();
+        let statements = covered + missing + file.excluded_lines.len();
+        out.push_str(&format!(
+            "| `{}` | {} | {} | {} | {:.1}% |\n",
+            file.path.replace('|', "\\|"),
+            covered,
+            missing,
+            statements,
+            file.percent_covered
+        ));
+    }
+
+    Ok(out)
+}
+
+fn html_escape(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn coverage_tone(percent: f64) -> (&'static str, &'static str, &'static str) {
+    if percent >= 80.0 {
+        ("#10b981", "#047857", "#ecfdf5")
+    } else if percent >= 50.0 {
+        ("#f59e0b", "#b45309", "#fffbeb")
+    } else {
+        ("#f43f5e", "#be123c", "#fff1f2")
+    }
+}
+
+/// 将 coverage.json 转换为单个自包含 HTML 报告（摘要 + 逐文件表格）
+fn coverage_json_to_html(content: &str) -> Result<String, String> {
+    let (totals, files) = parse_coverage_json(content)?;
+
+    let (_, total_color, _) = coverage_tone(totals.percent_covered);
+    let total_value = format!("{:.1}%", totals.percent_covered);
+
+    let statements_pct = if totals.total_statements > 0 {
+        totals.covered_statements as f64 * 100.0 / totals.total_statements as f64
+    } else {
+        0.0
+    };
+    let statements_value = format!(
+        "{}/{} <span class=\"sub\">({:.1}%)</span>",
+        totals.covered_statements, totals.total_statements, statements_pct
+    );
+
+    let branch_value = match totals.branch_percent() {
+        Some(branch) => format!(
+            "{}/{} <span class=\"sub\">({:.1}%)</span>",
+            totals.covered_branches.unwrap_or(0),
+            totals.num_branches.unwrap_or(0),
+            branch
+        ),
+        None => "<span class=\"sub\">not enabled</span>".to_string(),
+    };
+
+    let mut rows = String::new();
+    for file in &files {
+        let covered = file.executed_lines.len();
+        let missing = file.missing_lines.len();
+        let statements = covered + missing + file.excluded_lines.len();
+        let pct = file.percent_covered;
+        let (bar, text, _) = coverage_tone(pct);
+        rows.push_str(&format!(
+            "<tr><td class=\"file\">{}</td><td class=\"num\">{}</td>\
+             <td class=\"num\">{}</td><td class=\"num\">{}</td>\
+             <td class=\"bar-cell\"><div class=\"bar\"><div style=\"width:{:.1}%;background:{}\"></div>\
+             </div></td><td class=\"pct\" style=\"color:{}\">{:.1}%</td></tr>\n",
+            html_escape(&file.path),
+            covered,
+            missing,
+            statements,
+            pct,
+            bar,
+            text,
+            pct
+        ));
+    }
+
+    let (_, statements_text, _) = coverage_tone(statements_pct);
+
+    Ok(format!(
+        "<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <title>Coverage Report</title><style>{HTML_STYLE}</style></head>\
+         <body><div class=\"container\"><h1>Coverage Report</h1>\
+         <div class=\"metrics\">\
+         <div class=\"metric\"><div class=\"label\">Total coverage</div>\
+         <div class=\"value\" style=\"color:{total_color}\">{total_value}</div></div>\
+         <div class=\"metric\"><div class=\"label\">Statements</div>\
+         <div class=\"value\" style=\"color:{statements_text}\">{statements_value}</div></div>\
+         <div class=\"metric\"><div class=\"label\">Branches</div>\
+         <div class=\"value\">{branch_value}</div></div>\
+         <div class=\"metric\"><div class=\"label\">Files</div>\
+         <div class=\"value\">{file_count}</div></div>\
+         </div><table><thead><tr><th>File</th><th class=\"num\">Covered</th>\
+         <th class=\"num\">Missing</th><th class=\"num\">Statements</th>\
+         <th class=\"num\">Coverage</th><th class=\"num\">%</th></tr></thead>\
+         <tbody>\n{rows}</tbody></table>\
+         <footer>Generated by coverage export.</footer></div></body></html>",
+        total_color = total_color,
+        total_value = total_value,
+        statements_text = statements_text,
+        statements_value = statements_value,
+        branch_value = branch_value,
+        file_count = files.len(),
+        rows = rows,
+    ))
+}
+
+const HTML_STYLE: &str = r#"
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;margin:0;padding:2rem;background:#fafafa;color:#18181b;}
+  .container{max-width:960px;margin:0 auto;}
+  h1{font-size:1.25rem;margin:0 0 1.5rem;}
+  .metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:0.75rem;margin-bottom:1.5rem;}
+  .metric{background:#fff;border:1px solid #e4e4e7;border-radius:0.5rem;padding:0.75rem 1rem;}
+  .metric .label{font-size:0.65rem;color:#71717a;text-transform:uppercase;letter-spacing:0.05em;}
+  .metric .value{margin-top:0.25rem;font-size:1.15rem;font-weight:600;}
+  .metric .sub{font-size:0.8rem;font-weight:400;color:#71717a;}
+  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #e4e4e7;border-radius:0.5rem;overflow:hidden;}
+  th{font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;color:#71717a;text-align:left;padding:0.6rem 1rem;background:#f4f4f5;}
+  td{padding:0.5rem 1rem;border-top:1px solid #f4f4f5;font-size:0.85rem;}
+  td.file{font-family:'SF Mono',Consolas,Menlo,monospace;font-size:0.8rem;}
+  td.num{text-align:right;color:#52525b;}
+  td.pct{text-align:right;font-weight:600;white-space:nowrap;}
+  .bar-cell{min-width:140px;}
+  .bar{height:0.5rem;border-radius:9999px;background:#e4e4e7;overflow:hidden;}
+  .bar>div{height:100%;border-radius:9999px;}
+  footer{margin-top:1.5rem;font-size:0.7rem;color:#a1a1aa;}
+"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE: &str = r#"{
+        "totals": {
+            "percent_covered": 85.5,
+            "num_statements": 100,
+            "covered_lines": 85,
+            "num_branches": 10,
+            "covered_branches": 6
+        },
+        "files": {
+            "src/main.py": {
+                "percent_covered": 85.5,
+                "executed_lines": [1, 2, 3, 10],
+                "missing_lines": [4, 5],
+                "excluded_lines": []
+            },
+            "src/util<&>.py": {
+                "percent_covered": 10.0,
+                "executed_lines": [1],
+                "missing_lines": [2, 3],
+                "excluded_lines": [4]
+            }
+        }
+    }"#;
+
+    #[test]
+    fn test_markdown_contains_totals_and_file_rows() {
+        let md = coverage_json_to_markdown(SAMPLE).unwrap();
+
+        assert!(md.contains("# Coverage Report"));
+        assert!(md.contains("| Total coverage | 85.5% |"));
+        assert!(md.contains("| Statements | 85/100 covered |"));
+        assert!(md.contains("| Branch coverage | 60.0% |"));
+        assert!(md.contains("| `src/main.py` | 4 | 2 | 6 | 85.5% |"));
+        // 表格中 `|` 需转义
+        assert!(md.contains("`src/util<&>.py`"));
+    }
+
+    #[test]
+    fn test_markdown_escapes_pipes_in_paths() {
+        let md = coverage_json_to_markdown(SAMPLE).unwrap();
+        assert!(md.contains("| `src/util<&>.py` |"));
+        // HTML 注入不应出现在 Markdown 中——覆盖率报告只是文本表格
+        assert!(!md.contains("<script>"));
+    }
+
+    #[test]
+    fn test_html_contains_table_and_escapes_content() {
+        let html = coverage_json_to_html(SAMPLE).unwrap();
+
+        assert!(html.starts_with("<!DOCTYPE html>"));
+        assert!(html.contains("<title>Coverage Report</title>"));
+        assert!(html.contains("<table>"));
+        assert!(html.contains(">src/main.py<"));
+        // 文件路径中的特殊字符必须转义，避免注入
+        assert!(html.contains("src/util&lt;&amp;&gt;.py"));
+        assert!(!html.contains("src/util<&>.py"));
+        assert!(html.contains("85.5%"));
+        assert!(html.contains("not enabled") == false || html.contains("60.0%"));
+    }
+
+    #[test]
+    fn test_html_branch_disabled() {
+        let json = r#"{
+            "totals": {
+                "percent_covered": 30.0,
+                "num_statements": 10,
+                "covered_lines": 3
+            },
+            "files": {
+                "src/a.py": {
+                    "executed_lines": [1],
+                    "missing_lines": [2],
+                    "excluded_lines": []
+                }
+            }
+        }"#;
+        let html = coverage_json_to_html(json).unwrap();
+        assert!(html.contains("not enabled"));
     }
 }
 

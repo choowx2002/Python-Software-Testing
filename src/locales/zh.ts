@@ -743,6 +743,8 @@ export default {
     export: {
       csv: "导出 CSV",
       json: "导出 JSON",
+      md: "导出 Markdown",
+      html: "导出 HTML",
       exporting: "导出中...",
       saved: "报告已保存到: {path}",
       csvSuccess: "CSV 报告已导出",

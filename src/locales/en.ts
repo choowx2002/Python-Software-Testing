@@ -743,6 +743,8 @@ reviewStep: {
     export: {
       csv: "Export CSV",
       json: "Export JSON",
+      md: "Export Markdown",
+      html: "Export HTML",
       exporting: "Exporting...",
       saved: "Report saved to: {path}",
       csvSuccess: "CSV report exported",
