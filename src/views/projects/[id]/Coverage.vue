@@ -462,12 +462,18 @@ function deriveSourceDirs(): string[] {
 /** 当前选择是否构成过滤视图（只展示选中目标的文件） */
 const hasTargetFilter = computed(() => selectedSourceFiles.value.length > 0);
 
+/** 路径归一化：coverage.json 的 key 在 Windows 下可能用 `\` 分隔，统一为 `/` 再比较 */
+function normalizePath(p: string) {
+  return p.replace(/\\/g, "/");
+}
+
 /** 文件路径是否属于当前选中的测量目标 */
 function isSelectedTarget(path: string) {
+  const p = normalizePath(path);
   return selectedSourceFiles.value.some((rel) => {
     const idx = rel.lastIndexOf("/");
-    if (idx === -1) return path === rel; // 根目录文件：精确匹配
-    return path === rel || path.startsWith(rel.slice(0, idx) + "/"); // 目录：前缀匹配
+    if (idx === -1) return p === rel; // 根目录文件：精确匹配
+    return p === rel || p.startsWith(rel.slice(0, idx) + "/"); // 目录：前缀匹配
   });
 }
 

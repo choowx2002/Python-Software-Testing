@@ -497,8 +497,12 @@ pub async fn get_coverage_detail(
     let project_root = read_project_root(&project_dir);
     let key = normalize_coverage_key(&file_path, project_root.as_deref());
 
+    // coverage.json 的 key 在 Windows 上是 `\` 分隔（如 core\controller.py），
+    // 归一化为 `/` 后再匹配前端传来的 `/` 风格路径
     let file_json = files
-        .get(&key)
+        .iter()
+        .find(|(k, _)| normalize_coverage_key(k, None) == key)
+        .map(|(_, v)| v)
         .ok_or_else(|| format!("File not found in coverage data: {}", key))?;
 
     let summary = file_json.get("summary").unwrap_or(file_json);
@@ -672,7 +676,9 @@ pub fn parse_coverage_json(content: &str) -> Result<(CoverageTotals, Vec<FileCov
             // format 2 的文件级统计在 summary 子对象里；format 1 直接在文件对象上
             let summary = file_json.get("summary").unwrap_or(file_json);
             FileCoverage {
-                path: path.clone(),
+                // Windows 下 coverage.json 的 key 用 `\` 分隔（core\controller.py），
+                // 统一转成 `/`，与前端扫描/过滤用的相对路径保持一致
+                path: path.replace('\\', "/"),
                 percent_covered: summary
                     .get("percent_covered")
                     .and_then(|v| v.as_f64())
@@ -756,6 +762,7 @@ fn coverage_json_to_csv(content: &str) -> Result<String, String> {
     for (path, file_json) in sorted {
         let summary = file_json.get("summary").unwrap_or(file_json);
 
+        let normalized_path = path.replace('\\', "/");
         let percent = summary
             .get("percent_covered")
             .and_then(|v| v.as_f64())
@@ -777,7 +784,7 @@ fn coverage_json_to_csv(content: &str) -> Result<String, String> {
 
         csv.push_str(&format!(
             "{},{:.2},{},{},{}\n",
-            csv_escape(path),
+            csv_escape(&normalized_path),
             percent,
             covered,
             csv_escape(&missing_lines),
