@@ -27,6 +27,7 @@ import { useI18n } from "vue-i18n";
 import AppSidebar from "../../components/AppSidebar.vue";
 import AppNavItem from "../../components/ui/AppNavItem.vue";
 import AppButton from "../../components/ui/AppButton.vue";
+import RunActivityBadge from "../../components/ui/RunActivityBadge.vue";
 import StatusPill from "../../components/ui/StatusPill.vue";
 import AppTooltip from "../../components/ui/AppTooltip.vue";
 import { useWindowTitle } from "../../composables/useWindowTitle";
@@ -158,6 +159,9 @@ async function refreshProject() {
   try {
     await projectStore.fetchProjects();
     await projectStore.updateLastOpened(projectId.value);
+    // 顺带校验/恢复解释器路径，并通知当前子页重新做环境检测
+    await projectStore.validateInterpreters();
+    window.dispatchEvent(new CustomEvent("testmate:env-check"));
   } catch (error) {
     console.error("[ProjectLayout] refreshProject failed:", error);
     localError.value = t("layout.refreshFailed");
@@ -360,6 +364,7 @@ onUnmounted(() => {
         </div>
 
         <div class="flex shrink-0 items-center gap-2">
+          <RunActivityBadge />
           <AppTooltip :content="t('layout.openFolder')" position="top">
             <AppButton variant="secondary" @click="openProjectFolder">
               <FolderOpen class="h-4 w-4" />

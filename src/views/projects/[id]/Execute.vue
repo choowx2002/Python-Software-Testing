@@ -7,7 +7,7 @@
  *   ③ 已保存选择：底部折叠区
  * 所有业务逻辑（事件监听 / 收集 / 执行 / 套件 / 持久化）保持不变。
  */
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useRoute, useRouter } from "vue-router";
@@ -32,10 +32,10 @@ import {
   Search,
   Square,
   Trash2,
-  WandSparkles,
   XCircle,
 } from "@lucide/vue";
 import { useProjectStore } from "../../../stores/projectStore";
+import { useRunStore } from "../../../stores/runStore";
 import { useUIStore } from "../../../stores/uiStore";
 import { parseArguments } from "../../../helper/execute";
 import { interpretError, type InterpretedError } from "../../../utils/errors";
@@ -51,11 +51,11 @@ import StatusPill from "../../../components/ui/StatusPill.vue";
 import { useTaskbarProgress } from "../../../composables/useTaskbarProgress";
 import { useWindowTitle } from "../../../composables/useWindowTitle";
 import { usePageShortcuts } from "../../../composables/useKeyboardShortcuts";
-import { notifyExecutionComplete } from "../../../composables/useNotifications";
 
 const route = useRoute();
 const router = useRouter();
 const projectStore = useProjectStore();
+const runStore = useRunStore();
 const uiStore = useUIStore();
 const { t } = useI18n();
 
@@ -217,12 +217,18 @@ const selectedTestFile = ref("");
 const selectedTestCases = ref<string[]>([]);
 
 const testFiles = ref<TestFile[]>([]);
-const testCases = ref<TestCase[]>([]);
+// 大列表只整体替换、不做逐项代理，避免千/万级用例被深响应式化导致卡顿
+const testCases = shallowRef<TestCase[]>([]);
 
 const isLoadingTests = ref(false);
 const isCollecting = ref(false);
 const testScanError = ref<InterpretedError | null>(null);
 const collectError = ref<InterpretedError | null>(null);
+
+/* 按需收集：进度/停止状态 */
+const collectRunId = ref<string | null>(null);
+const collectProgress = ref(0);
+let unlistenCollect: UnlistenFn | undefined;
 
 const testSearch = ref("");
 const resultFilter = ref<ResultFilter>("all");
@@ -274,7 +280,8 @@ const failedTests = ref(0);
 const skippedTests = ref(0);
 
 const executionDuration = ref(0);
-const testResults = ref<TestResult[]>([]);
+// 大列表只整体替换、不做逐项代理
+const testResults = shallowRef<TestResult[]>([]);
 
 const expandedFailures = ref<Set<string>>(new Set());
 
@@ -373,13 +380,16 @@ const filteredTestCases = computed(() => {
 
 const selectedCount = computed(() => selectedTestCases.value.length);
 
+/** O(1) 选中判定：大列表逐行 includes 是 O(N²) 卡顿源之一 */
+const selectedTestSet = computed(() => new Set(selectedTestCases.value));
+
 const allVisibleSelected = computed(() => {
   if (filteredTestCases.value.length === 0) {
     return false;
   }
 
   return filteredTestCases.value.every((test) =>
-    selectedTestCases.value.includes(test.id),
+    selectedTestSet.value.has(test.id),
   );
 });
 
@@ -439,10 +449,7 @@ const canRun = computed(() => {
     return false;
   }
 
-  if (testCases.value.length === 0) {
-    return false;
-  }
-
+  // “全部 / 文件 / 套件”运行无需先收集用例清单；仅“选中”需要已收集且已选
   if (testScope.value === "file" && !selectedTestFile.value) {
     return false;
   }
@@ -701,17 +708,6 @@ async function setupTestListeners() {
       clearTaskProgress();
       resetWinStatus();
 
-      // 完成后系统通知（长任务在后台时提醒用户）
-      if (currentProject.value?.name) {
-        void notifyExecutionComplete(
-          currentProject.value.name,
-          event.payload.passed,
-          event.payload.failed,
-        );
-      }
-
-      await saveExecutionToDb(event.payload);
-
       // 手动运行且有测试通过时：弹出下一步询问（覆盖率 / 保存选择 / 稍后）
       if (event.payload.passed > 0 && event.payload.executionType !== "REGRESSION") {
         postRunSummary.value = {
@@ -762,7 +758,89 @@ function parseRealtimeProgress(line: string) {
 /* -------------------------------------------------------------------------- */
 
 async function refreshTests() {
-  await Promise.all([collectTestCases(), scanTestFiles()]);
+  // 刷新仅重扫测试文件；用例列表改为按需收集（进入页面不再自动全量 collect）
+  await scanTestFiles();
+}
+
+/** 顶部“刷新”：selected 范围需要重新收集用例；其它范围只重扫文件 */
+async function refreshScope() {
+  if (isRunning.value || isCollecting.value) return;
+  if (testScope.value === "selected") {
+    await startCollect(null);
+    return;
+  }
+  await refreshTests();
+}
+
+async function setupCollectListener() {
+  unlistenCollect?.();
+  unlistenCollect = await listen<{ runId: string; count: number }>(
+    "collect-progress",
+    (event) => {
+      if (event.payload.runId === collectRunId.value) {
+        collectProgress.value = event.payload.count;
+      }
+    },
+  );
+}
+
+/**
+ * 按需收集用例（全部或指定文件）。
+ * 大项目收集可能较慢：后端流式上报已发现数量，前端显示并可中途停止。
+ */
+async function startCollect(file: string | null = null) {
+  const projectPath = currentProject.value?.path;
+  if (!projectPath || isCollecting.value) {
+    if (!projectPath) {
+      collectError.value = { message: t("execute.projectPathUnavailable") };
+    }
+    return;
+  }
+
+  const rid = crypto.randomUUID();
+  collectRunId.value = rid;
+  collectProgress.value = 0;
+  collectError.value = null;
+  isCollecting.value = true;
+
+  try {
+    const found = await invoke<TestCase[]>("collect_test_cases", {
+      projectPath,
+      runId: rid,
+      file: file ?? null,
+    });
+    testCases.value = found;
+    testSearch.value = "";
+
+    selectedTestCases.value = selectedTestCases.value.filter((id) =>
+      testCases.value.some((test) => test.id === id),
+    );
+    if (
+      selectedTestFile.value &&
+      !testFiles.value.some(
+        (fileEntry) => fileEntry.relativePath === selectedTestFile.value,
+      )
+    ) {
+      selectedTestFile.value = "";
+    }
+  } catch (error) {
+    console.error("[Execute] collect_test_cases failed:", error);
+    collectError.value = interpretError(error);
+    testCases.value = [];
+    selectedTestCases.value = [];
+  } finally {
+    isCollecting.value = false;
+    collectRunId.value = null;
+  }
+}
+
+async function stopCollect() {
+  if (!collectRunId.value) return;
+  try {
+    await invoke("cancel_run", { runId: collectRunId.value });
+  } catch (error) {
+    console.error("[Execute] Failed to stop collecting:", error);
+  }
 }
 
 async function scanTestFiles() {
@@ -786,45 +864,6 @@ async function scanTestFiles() {
     testFiles.value = [];
   } finally {
     isLoadingTests.value = false;
-  }
-}
-
-async function collectTestCases() {
-  const projectPath = currentProject.value?.path;
-
-  if (!projectPath) {
-    collectError.value = { message: t("execute.projectPathUnavailable") };
-    return;
-  }
-
-  isCollecting.value = true;
-  collectError.value = null;
-
-  try {
-    testCases.value = await invoke<TestCase[]>("collect_test_cases", {
-      projectPath,
-    });
-
-    selectedTestCases.value = selectedTestCases.value.filter((id) =>
-      testCases.value.some((test) => test.id === id),
-    );
-
-    if (
-      selectedTestFile.value &&
-      !testFiles.value.some(
-        (file) => file.relativePath === selectedTestFile.value,
-      )
-    ) {
-      selectedTestFile.value = "";
-    }
-  } catch (error) {
-    console.error("[Execute] collect_test_cases failed:", error);
-
-    collectError.value = interpretError(error);
-    testCases.value = [];
-    selectedTestCases.value = [];
-  } finally {
-    isCollecting.value = false;
   }
 }
 
@@ -890,7 +929,7 @@ function toggleTest(testId: string, event?: MouseEvent) {
 }
 
 function isTestSelected(testId: string) {
-  return selectedTestCases.value.includes(testId);
+  return selectedTestSet.value.has(testId);
 }
 
 function selectAllVisible() {
@@ -903,6 +942,11 @@ function selectAllVisible() {
   selectedTestCases.value = Array.from(
     new Set([...selectedTestCases.value, ...ids]),
   );
+
+  // all 范围全选后，切到 selected 以便“运行选中用例”
+  if (testScope.value === "all") {
+    testScope.value = "selected";
+  }
 }
 
 function clearSelection() {
@@ -912,6 +956,50 @@ function clearSelection() {
 
   selectedTestCases.value = [];
 }
+
+/* -------------------------------------------------------------------------- */
+/* 用例列表虚拟化：大列表只渲染可视行，避免首屏一次性创建千/万级 DOM           */
+/* -------------------------------------------------------------------------- */
+
+const TEST_ROW_H = 58;
+const TEST_OVERSCAN = 12;
+const TEST_VIEW_H = 224; // 容器 h-56
+const tcScrollTop = ref(0);
+const tcScrollEl = ref<HTMLElement | null>(null);
+
+const tcTotal = computed(() => filteredTestCases.value.length);
+const tcVirtual = computed(
+  () => tcTotal.value > 400 && tcTotal.value * TEST_ROW_H > TEST_VIEW_H,
+);
+
+const tcStart = computed(() => {
+  if (!tcVirtual.value) return 0;
+  return Math.max(0, Math.floor(tcScrollTop.value / TEST_ROW_H) - TEST_OVERSCAN);
+});
+
+const tcEnd = computed(() => {
+  if (!tcVirtual.value) return tcTotal.value;
+  const end = Math.ceil((tcScrollTop.value + TEST_VIEW_H) / TEST_ROW_H);
+  return Math.min(tcTotal.value, end + TEST_OVERSCAN);
+});
+
+const tcRows = computed(() => {
+  if (!tcVirtual.value) return filteredTestCases.value;
+  return filteredTestCases.value.slice(tcStart.value, tcEnd.value);
+});
+
+function onTestListScroll(event: Event) {
+  const el = event.currentTarget as HTMLElement;
+  tcScrollTop.value = el.scrollTop;
+}
+
+watch(
+  [filteredTestCases, testScope],
+  () => {
+    tcScrollTop.value = 0;
+    if (tcScrollEl.value) tcScrollEl.value.scrollTop = 0;
+  },
+);
 
 function getExpectedTestCount() {
   switch (testScope.value) {
@@ -951,6 +1039,13 @@ async function runTests() {
   const targets = executionTargets.value;
 
   resetExecutionState();
+
+  if (currentProject.value?.id && currentProject.value.name) {
+    runStore.prepare("execute", {
+      projectId: currentProject.value.id,
+      projectName: currentProject.value.name,
+    });
+  }
 
   try {
     await invoke("run_tests", {
@@ -1091,6 +1186,12 @@ async function runSuite(suite: RegressionSuite) {
 
   try {
     resetExecutionState();
+    if (currentProject.value?.id && currentProject.value.name) {
+      runStore.prepare("execute", {
+        projectId: currentProject.value.id,
+        projectName: currentProject.value.name,
+      });
+    }
     await invoke("run_regression_suite", { suiteId: suite.id });
   } catch (error) {
     console.error("[Execute] Failed to run regression suite:", error);
@@ -1147,51 +1248,6 @@ function runCoverageFromPostRun() {
     params: { id: projectId.value },
     query: { autoRun: "1" },
   });
-}
-
-/**
- * 将测试执行结果持久化到本地 SQLite 数据库（NFR008：走 Rust 类型化命令）
- * execution_type 对齐论文 Table 5.2：MANUAL（手动执行）/ REGRESSION（回归套件重跑）
- */
-async function saveExecutionToDb(payload: TestFinishedEvent) {
-  if (!currentProject.value?.id) return;
-
-  try {
-    const totalTests = payload.passed + payload.failed + payload.skipped;
-    const executionStatus = payload.success ? "success" : "failed";
-
-    const executionId = await invoke<number>("save_execution_history", {
-      projectId: currentProject.value.id,
-      executionType: payload.executionType,
-      regressionSuiteId: payload.regressionSuiteId,
-      executionStatus,
-      command: payload.command || null,
-      totalTests,
-      passed: payload.passed,
-      failed: payload.failed,
-      skipped: payload.skipped,
-      executionTime: payload.duration,
-    });
-
-    // 保存单条结果明细（供历史详情查看失败原因等）
-    if (payload.results.length > 0) {
-      await invoke("save_execution_result_details", {
-        executionId,
-        results: payload.results.map((r) => ({
-          name: r.name,
-          file: r.file || null,
-          status: r.status,
-          duration: r.duration,
-          errorMessage: r.errorMessage,
-          line: r.line,
-          skipReason: r.skipReason,
-        })),
-      });
-    }
-    console.log("[DB] ✅ Execution history saved successfully");
-  } catch (error) {
-    console.error("[DB] ❌ Failed to save execution history:", error);
-  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1443,6 +1499,42 @@ async function openPreview(file: string, line: number | null) {
 /* Watchers / lifecycle                                                       */
 /* -------------------------------------------------------------------------- */
 
+/** 最近一次本页 run 在"后台完成"的快照回显（用于切页离开后回来展示结果） */
+const adoptedRunId = ref<string | null>(null);
+
+function adoptBackgroundResult() {
+  const pid = projectId.value;
+  if (Number.isNaN(pid)) return;
+  if (isRunning.value) return;
+  if (runStore.activeForProject(pid).length > 0) return;
+
+  const snap = runStore.lastRun(pid, "execute");
+  if (!snap || snap.runId === adoptedRunId.value) return;
+  // 被取消的空结果不覆盖当前状态
+  if (!snap.success && (snap.results?.length ?? 0) === 0) return;
+  // 本页已展示过该次运行（正常在页内完成）则跳过
+  if (executionStatus.value !== "idle") return;
+
+  adoptedRunId.value = snap.runId;
+  executionStatus.value = snap.status === "completed" ? "completed" : "failed";
+  executionDuration.value = snap.duration;
+  passedTests.value = snap.passed ?? 0;
+  failedTests.value = snap.failed ?? 0;
+  skippedTests.value = snap.skipped ?? 0;
+  testResults.value = (snap.results ?? []).map((r) => ({
+    id: r.id,
+    name: r.name,
+    file: r.file,
+    status: r.status as TestResult["status"],
+    duration: r.duration,
+    errorMessage: r.errorMessage,
+    line: r.line,
+    skipReason: r.skipReason,
+  }));
+  completedTests.value = testResults.value.length;
+  totalTests.value = Math.max(totalTests.value, testResults.value.length);
+}
+
 watch(
   currentProject,
   async (project) => {
@@ -1451,16 +1543,31 @@ watch(
     }
 
     resetExecutionState();
+    adoptedRunId.value = null;
 
     selectedTestCases.value = [];
     selectedTestFile.value = "";
     testSearch.value = "";
+    testCases.value = [];
+    isCollecting.value = false;
+    collectRunId.value = null;
+    collectError.value = null;
+    collectProgress.value = 0;
 
-    await Promise.all([refreshTests(), loadSuites()]);
+    // 进入页面不再自动全量 collect；只在需要挑选单个/选中用例时才按需收集
+    await Promise.all([scanTestFiles(), loadSuites()]);
 
-    // 消费"历史详情一键重跑失败用例"：选中失败用例并自动运行
+    // 消费"历史详情一键重跑失败用例"：需要收集到用例清单
     const pendingProject = uiStore.pendingRerunProjectId;
     const pendingIds = uiStore.pendingRerunTestIds;
+    if (
+      pendingProject !== null &&
+      pendingProject === project.id &&
+      pendingIds.length > 0 &&
+      testCases.value.length === 0
+    ) {
+      await startCollect(null);
+    }
     if (pendingProject !== null && pendingProject === project.id && pendingIds.length > 0) {
       const matched = testCases.value.filter((t) =>
         pendingIds.some(
@@ -1483,8 +1590,22 @@ watch(
   },
 );
 
+// 后台完成的执行结果 → 自动回显（离开期间完成，或仍在跑时回到本页）
+watch(
+  () => {
+    const pid = projectId.value;
+    if (Number.isNaN(pid)) return undefined;
+    return runStore.lastRun(pid, "execute")?.runId;
+  },
+  () => {
+    adoptBackgroundResult();
+  },
+  { immediate: true },
+);
+
 onMounted(() => {
   void setupTestListeners();
+  void setupCollectListener();
   window.addEventListener('testmate:focus-search', onFocusSearch);
 });
 
@@ -1505,6 +1626,7 @@ onUnmounted(() => {
   unlistenStarted?.();
   unlistenOutput?.();
   unlistenFinished?.();
+  unlistenCollect?.();
   window.removeEventListener('testmate:focus-search', onFocusSearch);
 });
 
@@ -1559,8 +1681,8 @@ function onFocusSearch() {
               variant="secondary"
               size="sm"
               :loading="isCollecting || isLoadingTests"
-              :disabled="isRunning"
-              @click="refreshTests"
+              :disabled="isRunning || isCollecting"
+              @click="refreshScope"
             >
               <RefreshCw class="h-3.5 w-3.5" />
               {{ t("common.refresh") }}
@@ -1574,7 +1696,7 @@ function onFocusSearch() {
             v-for="opt in scopeOptions"
             :key="opt.id"
             type="button"
-            :disabled="isRunning"
+            :disabled="isRunning || isCollecting"
             class="rounded-md px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed"
             :class="
               testScope === opt.id
@@ -1605,8 +1727,15 @@ function onFocusSearch() {
           </select>
         </div>
 
-        <!-- 目标选择：测试用例列表（搜索 + 多选） -->
-        <div v-if="testScope === 'selected'" class="mt-3 rounded-lg border border-border">
+        <!-- 目标选择：测试用例列表（搜索 + 多选；all 范围可收集浏览后再切 selected） -->
+        <div v-if="testScope === 'all' || testScope === 'selected'" class="mt-3 rounded-lg border border-border">
+          <!-- all 范围未收集时的说明 -->
+          <p
+            v-if="testScope === 'all' && !isCollecting && testCases.length === 0 && !collectError"
+            class="px-3 pt-3 text-[11px] text-zinc-500"
+          >
+            {{ t("execute.allScopeHint") }}
+          </p>
           <div class="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
             <div class="relative min-w-0 flex-1">
               <Search
@@ -1617,7 +1746,7 @@ function onFocusSearch() {
                 ref="testSearchInput"
                 type="text"
                 :placeholder="t('execute.searchPlaceholder')"
-                :disabled="isRunning"
+                :disabled="isRunning || isCollecting"
                 class="input h-8 pl-8 pr-3"
               />
             </div>
@@ -1641,9 +1770,22 @@ function onFocusSearch() {
             </div>
           </div>
 
-          <div class="max-h-56 overflow-auto">
-            <div v-if="isCollecting" class="px-4 py-8 text-center text-sm text-zinc-500">
-              {{ t("execute.collecting") }}
+          <div
+            ref="tcScrollEl"
+            class="overflow-auto"
+            :class="tcVirtual ? 'h-56' : 'max-h-56'"
+            @scroll.passive="onTestListScroll"
+          >
+            <div v-if="isCollecting" class="flex flex-col items-center gap-2 px-4 py-8">
+              <Loader2 class="h-4 w-4 animate-spin text-brand-500" />
+              <div class="text-sm text-zinc-600">{{ t("execute.collecting") }}</div>
+              <div class="text-xs text-zinc-400">
+                {{ t("execute.collectFound", { count: collectProgress }) }}
+              </div>
+              <AppButton variant="secondary" size="sm" :disabled="!collectRunId" @click="stopCollect">
+                <Square class="h-3 w-3" />
+                {{ t("execute.collectStop") }}
+              </AppButton>
             </div>
             <div
               v-else-if="collectError"
@@ -1653,58 +1795,109 @@ function onFocusSearch() {
               <p v-if="collectError.hint" class="mt-1 text-[11px] text-rose-600">
                 {{ collectError.hint }}
               </p>
+              <AppButton variant="secondary" size="sm" class="mt-2" :disabled="isRunning" @click="startCollect(null)">
+                {{ t("common.retry") }}
+              </AppButton>
             </div>
             <div v-else-if="testCases.length === 0" class="px-4 py-8 text-center">
               <div class="text-sm font-medium text-zinc-700">{{ t("execute.noTestCases") }}</div>
-              <div class="mt-1 text-xs text-zinc-500">{{ t("execute.noTestCasesDesc") }}</div>
+              <div
+                v-if="testScope === 'selected'"
+                class="mx-auto mt-1 max-w-sm text-xs text-zinc-500"
+              >
+                {{ t("execute.collectNote") }}
+              </div>
               <div class="mt-4 flex items-center justify-center gap-2">
-                <AppButton variant="secondary" size="sm" :disabled="isRunning" @click="refreshTests">
-                  <RefreshCw class="h-3.5 w-3.5" />
-                  {{ t("common.refresh") }}
-                </AppButton>
                 <AppButton
                   variant="primary"
                   size="sm"
-                  @click="router.push({ name: 'ProjectGenerate', params: { id: projectId } })"
+                  :disabled="isRunning || isCollecting"
+                  @click="startCollect(null)"
                 >
-                  <WandSparkles class="h-3.5 w-3.5" />
-                  {{ t("execute.goGenerate") }}
+                  <ListChecks class="h-3.5 w-3.5" />
+                  {{ t("execute.collectAll") }}
+                </AppButton>
+                <AppButton
+                  variant="secondary"
+                  size="sm"
+                  v-if="testScope === 'selected'"
+                  :disabled="isRunning"
+                  @click="setScope('all')"
+                >
+                  {{ t("execute.runAllInstead") }}
                 </AppButton>
               </div>
             </div>
             <div v-else-if="filteredTestCases.length === 0" class="px-4 py-8 text-center text-sm text-zinc-500">
               {{ t("execute.noSearchResults") }}
             </div>
-            <button
-              v-for="test in filteredTestCases"
-              :key="test.id"
-              type="button"
-              :disabled="isRunning"
-              class="flex w-full items-center gap-3 border-b border-border px-3 py-2 text-left transition last:border-b-0 hover:bg-zinc-50 disabled:cursor-not-allowed"
-              @click="toggleTest(test.id, $event)"
-              @contextmenu.prevent="showTestCaseMenu(test, $event)"
-            >
-              <span
-                class="flex h-4 w-4 shrink-0 items-center justify-center rounded border transition"
-                :class="
-                  isTestSelected(test.id)
-                    ? 'border-brand-500 bg-brand-500 text-white'
-                    : 'border-zinc-300 bg-white'
-                "
+            <template v-if="tcVirtual">
+              <div :style="{ position: 'relative', height: `${tcTotal * TEST_ROW_H}px` }">
+                <button
+                  v-for="(test, idx) in tcRows"
+                  :key="test.id"
+                  type="button"
+                  :disabled="isRunning"
+                  class="flex w-full items-center gap-3 border-b border-border px-3 py-2 text-left transition hover:bg-zinc-50 disabled:cursor-not-allowed"
+                  :style="{ position: 'absolute', left: '0', right: '0', top: `${(tcStart + idx) * TEST_ROW_H}px`, height: `${TEST_ROW_H}px` }"
+                  @click="toggleTest(test.id, $event)"
+                  @contextmenu.prevent="showTestCaseMenu(test, $event)"
+                >
+                  <span
+                    class="flex h-4 w-4 shrink-0 items-center justify-center rounded border transition"
+                    :class="
+                      isTestSelected(test.id)
+                        ? 'border-brand-500 bg-brand-500 text-white'
+                        : 'border-zinc-300 bg-white'
+                    "
+                  >
+                    <Check v-if="isTestSelected(test.id)" class="h-3 w-3" />
+                  </span>
+                  <FileCode2 class="h-4 w-4 shrink-0 text-zinc-400" />
+                  <span class="min-w-0 flex-1">
+                    <span class="block truncate text-[13px] font-medium text-zinc-800">
+                      {{ test.name }}
+                    </span>
+                    <span class="mt-0.5 block truncate font-mono text-[10px] text-zinc-500">
+                      {{ test.file }}
+                      <template v-if="test.className">::{{ test.className }}</template>
+                    </span>
+                  </span>
+                </button>
+              </div>
+            </template>
+            <template v-else>
+              <button
+                v-for="test in filteredTestCases"
+                :key="test.id"
+                type="button"
+                :disabled="isRunning"
+                class="flex w-full items-center gap-3 border-b border-border px-3 py-2 text-left transition last:border-b-0 hover:bg-zinc-50 disabled:cursor-not-allowed"
+                @click="toggleTest(test.id, $event)"
+                @contextmenu.prevent="showTestCaseMenu(test, $event)"
               >
-                <Check v-if="isTestSelected(test.id)" class="h-3 w-3" />
-              </span>
-              <FileCode2 class="h-4 w-4 shrink-0 text-zinc-400" />
-              <span class="min-w-0 flex-1">
-                <span class="block truncate text-[13px] font-medium text-zinc-800">
-                  {{ test.name }}
+                <span
+                  class="flex h-4 w-4 shrink-0 items-center justify-center rounded border transition"
+                  :class="
+                    isTestSelected(test.id)
+                      ? 'border-brand-500 bg-brand-500 text-white'
+                      : 'border-zinc-300 bg-white'
+                  "
+                >
+                  <Check v-if="isTestSelected(test.id)" class="h-3 w-3" />
                 </span>
-                <span class="mt-0.5 block truncate font-mono text-[10px] text-zinc-500">
-                  {{ test.file }}
-                  <template v-if="test.className">::{{ test.className }}</template>
+                <FileCode2 class="h-4 w-4 shrink-0 text-zinc-400" />
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-[13px] font-medium text-zinc-800">
+                    {{ test.name }}
+                  </span>
+                  <span class="mt-0.5 block truncate font-mono text-[10px] text-zinc-500">
+                    {{ test.file }}
+                    <template v-if="test.className">::{{ test.className }}</template>
+                  </span>
                 </span>
-              </span>
-            </button>
+              </button>
+            </template>
           </div>
         </div>
 
@@ -2019,7 +2212,7 @@ function onFocusSearch() {
             </div>
 
             <div class="mt-1 divide-y divide-border">
-              <div v-for="result in filteredResults" :key="result.id" class="py-2.5" @contextmenu.prevent="showResultMenu(result, $event)" @dblclick="openResultFile(result)">
+              <div v-for="result in filteredResults" :key="result.id" class="res-row py-2.5" @contextmenu.prevent="showResultMenu(result, $event)" @dblclick="openResultFile(result)">
                 <div class="flex items-center gap-3">
                   <component
                     :is="getResultIcon(result.status)"
@@ -2260,3 +2453,11 @@ function onFocusSearch() {
     />
   </div>
 </template>
+
+<style scoped>
+/* 海量结果行：离屏行跳过布局，降低长列表渲染成本 */
+.res-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 54px;
+}
+</style>

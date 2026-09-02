@@ -4,10 +4,12 @@ import { useRouter } from 'vue-router'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useGlobalShortcuts } from './composables/useKeyboardShortcuts'
 import { useUIStore } from './stores/uiStore'
+import { useRunStore } from './stores/runStore'
 import HistoryDetailWindow from './views/HistoryDetailWindow.vue'
 
 const router = useRouter()
 const uiStore = useUIStore()
+const runStore = useRunStore()
 
 // 独立详情窗口（label 为 detail）直接渲染详情视图，跳过正常路由
 const isDetailWindow = getCurrentWindow().label === 'detail'
@@ -24,6 +26,9 @@ if (!isDetailWindow) {
 }
 
 onMounted(() => {
+  // 后台运行收尾服务：历史入库 / 通知 / 进度清理常驻于 App 级，
+  // 切页/离开发起页也不丢结果
+  runStore.init()
   if (!isDetailWindow) console.log('App mounted')
 })
 

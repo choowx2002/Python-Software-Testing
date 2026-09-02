@@ -30,6 +30,7 @@ import {
   WandSparkles,
 } from "@lucide/vue";
 import { useProjectStore } from "../../../stores/projectStore";
+import { useRunStore } from "../../../stores/runStore";
 import { useUIStore } from "../../../stores/uiStore";
 import TreeItem from "../../../components/TreeItem.vue";
 import { interpretError, type InterpretedError } from "../../../utils/errors";
@@ -42,11 +43,11 @@ import StatusPill from "../../../components/ui/StatusPill.vue";
 import { useTaskbarProgress } from "../../../composables/useTaskbarProgress";
 import { useWindowTitle } from "../../../composables/useWindowTitle";
 import { usePageShortcuts } from "../../../composables/useKeyboardShortcuts";
-import { notifyCoverageComplete } from "../../../composables/useNotifications";
 
 const route = useRoute();
 const router = useRouter();
 const projectStore = useProjectStore();
+const runStore = useRunStore();
 const uiStore = useUIStore();
 const { t } = useI18n();
 
@@ -753,19 +754,9 @@ async function setupCoverageListeners() {
       clearTaskProgress();
       resetWinStatus();
 
-      // 完成后系统通知（长任务在后台时提醒用户）
-      if (currentProject.value?.name && event.payload.summary) {
-        void notifyCoverageComplete(
-          currentProject.value.name,
-          event.payload.summary.percentCovered,
-        );
-      }
-
       if (event.payload.summary) {
         summary.value = event.payload.summary;
         coverageStatus.value = "completed";
-
-        await saveCoverageToDb(event.payload);
       } else {
         coverageStatus.value = "failed";
       }
@@ -779,26 +770,6 @@ async function setupCoverageListeners() {
             : t("coverage.logs.systemWarning"),
           logId: logCounter++,
         });
-      }
-
-      // 持久化覆盖率运行历史（NFR008：走 Rust 类型化命令）
-      if (currentProject.value?.id) {
-        void invoke("save_coverage_history", {
-          projectId: currentProject.value.id,
-          coverageStatus: event.payload.summary
-            ? event.payload.success
-              ? "success"
-              : "warning"
-            : "failed",
-          percentCovered: event.payload.summary?.percentCovered ?? 0,
-          totalStatements: event.payload.summary?.totalStatements ?? 0,
-          coveredStatements: event.payload.summary?.coveredStatements ?? 0,
-          duration: event.payload.duration,
-          command: event.payload.command || null,
-          filesJson: event.payload.summary
-            ? JSON.stringify(event.payload.summary.files)
-            : null,
-        }).catch((e) => console.error("[Coverage] save history failed:", e));
       }
     },
   );
@@ -956,6 +927,13 @@ async function runCoverage() {
 
   resetRunState();
 
+  if (currentProject.value?.id && currentProject.value.name) {
+    runStore.prepare("coverage", {
+      projectId: currentProject.value.id,
+      projectName: currentProject.value.name,
+    });
+  }
+
   try {
     await invoke("run_coverage", {
       projectId: currentProject.value!.id,
@@ -994,35 +972,6 @@ function resetRunState() {
   coverageOutput.value = [];
   errorMessage.value = null;
   coverageStatus.value = "idle";
-}
-
-/**
- * 将覆盖率摘要持久化到本地 SQLite 数据库（coverage_results 表）
- * NFR008：走 Rust 类型化命令
- */
-async function saveCoverageToDb(payload: CoverageFinishedEvent) {
-  if (!currentProject.value?.id) return;
-  if (!payload.summary) return;
-
-  try {
-    const runSummary = payload.summary;
-    const coveredFileCount = runSummary.files.filter(
-      (f) => f.percentCovered > 0,
-    ).length;
-
-    await invoke("save_coverage_result", {
-      projectId: currentProject.value.id,
-      executionId: null, // 当前覆盖率运行未关联 test_execution_history
-      totalStatementCoverage: runSummary.percentCovered,
-      totalBranchCoverage: runSummary.branchPercent ?? null, // --branch 模式：分支覆盖率
-      fileCount: runSummary.files.length,
-      coveredFileCount,
-      detailJsonPath: runSummary.jsonPath,
-    });
-    console.log("[DB] ✅ Coverage summary saved successfully");
-  } catch (error) {
-    console.error("[DB] ❌ Failed to save coverage summary:", error);
-  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1132,12 +1081,34 @@ function clearOutput() {
 /* Watchers / lifecycle                                                       */
 /* -------------------------------------------------------------------------- */
 
+/** 最近一次本页 run 在"后台完成"的快照回显 */
+const adoptedRunId = ref<string | null>(null);
+
+function adoptBackgroundResult() {
+  const pid = projectId.value;
+  if (Number.isNaN(pid)) return;
+  if (isRunning.value) return;
+  if (runStore.activeForProject(pid).length > 0) return;
+  if (route.query.autoRun === "1") return;
+
+  const snap = runStore.lastRun(pid, "coverage");
+  if (!snap || snap.runId === adoptedRunId.value) return;
+  if (coverageStatus.value !== "idle") return;
+  if (!snap.summary) return;
+
+  adoptedRunId.value = snap.runId;
+  summary.value = snap.summary;
+  coverageStatus.value = "completed";
+  executionDuration.value = snap.duration;
+}
+
 watch(
   currentProject,
   async (project) => {
     if (!project) return;
 
     resetRunState();
+    adoptedRunId.value = null;
     selectedSourceFiles.value = [];
     selectedTestFiles.value = [];
     sourceSearch.value = "";
@@ -1166,10 +1137,28 @@ watch(
   },
 );
 
+// 后台完成的覆盖率结果 → 自动回显
+watch(
+  () => {
+    const pid = projectId.value;
+    if (Number.isNaN(pid)) return undefined;
+    return runStore.lastRun(pid, "coverage")?.runId;
+  },
+  () => {
+    adoptBackgroundResult();
+  },
+  { immediate: true },
+);
+
 onMounted(() => {
   void setupCoverageListeners();
   window.addEventListener('testmate:focus-search', onFocusSearch);
+  window.addEventListener('testmate:env-check', onEnvCheck);
 });
+
+function onEnvCheck() {
+  void checkCoverageInstalled();
+}
 
 // Ctrl+` 展开/收起终端
 usePageShortcuts(
@@ -1185,6 +1174,7 @@ onUnmounted(() => {
   unlistenFinished?.();
   unlistenError?.();
   window.removeEventListener('testmate:focus-search', onFocusSearch);
+  window.removeEventListener('testmate:env-check', onEnvCheck);
 });
 
 const sourceSearchInput = ref<HTMLInputElement | null>(null);

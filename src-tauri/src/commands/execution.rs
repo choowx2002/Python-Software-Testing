@@ -1,7 +1,6 @@
 use crate::state::{process_alive, terminate_pid, AppState};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tokio::process::Command as AsyncCommand;
 use std::process::Stdio;
 use tauri::AppHandle;
@@ -90,7 +89,12 @@ fn scan_test_directory(
 }
 
 #[tauri::command]
-pub fn collect_test_cases(project_path: String) -> Result<Vec<TestCase>, String> {
+pub async fn collect_test_cases(
+    app: tauri::AppHandle,
+    project_path: String,
+    run_id: String,
+    file: Option<String>,
+) -> Result<Vec<TestCase>, String> {
     let project = PathBuf::from(&project_path);
 
     if !project.exists() {
@@ -112,39 +116,111 @@ pub fn collect_test_cases(project_path: String) -> Result<Vec<TestCase>, String>
 
     let python = find_project_python(&project)?;
 
-    let output = Command::new(&python)
-        .no_console()
-        .current_dir(&project)
-        .env(
-            "PYTHONPATH",
-            build_python_path(&project)
-        )
-        .args([
-            "-m",
-            "pytest",
-            "--collect-only",
-            "-q",
-        ])
-        .output()
-        .map_err(|error| {
-            format!(
-                "Failed to start pytest using {:?}: {}",
-                python, error
-            )
-        })?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    if !output.status.success() {
-        return Err(format!(
-            "pytest collection failed.\n\n{}{}",
-            stdout,
-            stderr
-        ));
+    let mut args = vec![
+        "-m".to_string(),
+        "pytest".to_string(),
+        "--collect-only".to_string(),
+        "-q".to_string(),
+    ];
+    if let Some(f) = &file {
+        args.push(f.clone());
     }
 
-    parse_pytest_collection(&stdout, &project)
+    let mut child = match AsyncCommand::new(&python)
+        .no_console()
+        .current_dir(&project)
+        .env("PYTHONPATH", build_python_path(&project))
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => return Err(format!("Failed to start pytest: {}", e)),
+    };
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to capture pytest stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to capture pytest stderr".to_string())?;
+
+    register_run(&app, &run_id, child.id().unwrap_or(0));
+
+    // 读取收集输出：保留全部行用于解析，同时实时上报已发现的用例数
+    let progress_run_id = run_id.clone();
+    let progress_app = app.clone();
+    let stdout_task = tokio::spawn(async move {
+        let reader = BufReader::new(stdout);
+        let mut lines = reader.lines();
+        let mut collected: Vec<String> = Vec::new();
+        let mut count: u64 = 0;
+        while let Ok(Some(line)) = lines.next_line().await {
+            if line.contains("::") {
+                count += 1;
+                let _ = progress_app.emit(
+                    "collect-progress",
+                    CollectProgressEvent {
+                        run_id: progress_run_id.clone(),
+                        count,
+                    },
+                );
+            }
+            collected.push(line);
+        }
+        collected
+    });
+
+    let stderr_task = tokio::spawn(async move {
+        let reader = BufReader::new(stderr);
+        let mut lines = reader.lines();
+        let mut text = String::new();
+        while let Ok(Some(line)) = lines.next_line().await {
+            text.push_str(&line);
+            text.push('\n');
+        }
+        text
+    });
+
+    let status = match child.wait().await {
+        Ok(s) => s,
+        Err(e) => {
+            unregister_run(&app, &run_id);
+            return Err(format!("Failed waiting for pytest: {}", e));
+        }
+    };
+
+    let lines = stdout_task.await.unwrap_or_default();
+    let stderr_text = stderr_task.await.unwrap_or_default();
+    let was_cancelled = run_cancelled(&app, &run_id);
+    unregister_run(&app, &run_id);
+
+    if was_cancelled {
+        return Err("Test case collection cancelled.".to_string());
+    }
+
+    if !status.success() {
+        let trimmed = stderr_text.trim().to_string();
+        let tail: String = trimmed
+            .chars()
+            .rev()
+            .take(2000)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        if tail.is_empty() {
+            return Err("pytest collection failed.".to_string());
+        }
+        return Err(format!("pytest collection failed.\n\n{}", tail));
+    }
+
+    let stdout_content = lines.join("\n");
+    parse_pytest_collection(&stdout_content, &project)
 }
 
 fn find_project_python(project: &Path) -> Result<PathBuf, String> {
@@ -308,6 +384,14 @@ pub struct TestStartedEvent {
     pub total: usize,
 }
 
+/// 收集用例时的实时进度（已发现多少个用例）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectProgressEvent {
+    pub run_id: String,
+    pub count: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TestResult {
@@ -401,6 +485,43 @@ pub async fn run_tests_core(
             total,
         },
     );
+
+    // Windows CreateProcess 对命令行长度有限制：一次传入过多用例会报
+    // “os error 206: The filename or extension is too long”。预估超限时，
+    // 自动把选中用例分批执行（每批独立 junit，结果合并后统一发出 test-finished）。
+    if !test_cases.is_empty() {
+        let mut probe_args = vec![
+            "-m".to_string(),
+            "pytest".to_string(),
+            "-v".to_string(),
+        ];
+        if crate::perf::enabled() {
+            probe_args.push("-s".to_string());
+        }
+        probe_args.extend(pytest_args.clone());
+        probe_args.push("-o".to_string());
+        probe_args.push("junit_family=xunit1".to_string());
+        probe_args.push("--junitxml=<placeholder>".to_string());
+
+        let estimated: usize = interpreter.to_string_lossy().len()
+            + 2
+            + probe_args.iter().map(|a| a.len() + 3).sum::<usize>()
+            + test_cases.iter().map(|t| t.len() + 3).sum::<usize>();
+
+        if estimated > CHUNK_CMD_LIMIT {
+            return run_tests_chunked(
+                app_handle.clone(),
+                run_id,
+                execution_type.to_string(),
+                project,
+                interpreter,
+                test_cases,
+                pytest_args,
+                regression_suite_id,
+            )
+            .await;
+        }
+    }
 
     let junit_path = std::env::temp_dir().join(format!("pytest-{}.xml", run_id));
 
@@ -553,6 +674,261 @@ pub async fn run_tests_core(
 
     let _ = std::fs::remove_file(junit_path);
     Ok(run_id)
+}
+
+/// 分批执行时，单条 pytest 命令行的长度上限（Windows 下留足余量）
+const CHUNK_CMD_LIMIT: usize = 28_000;
+
+/// 检查某个 run 是否已被用户取消（取消标记在最后一轮 unregister 前持续生效）
+fn run_cancelled(app: &AppHandle, run_id: &str) -> bool {
+    app.state::<AppState>()
+        .cancelled_runs
+        .lock()
+        .map(|m| m.contains_key(run_id))
+        .unwrap_or(false)
+}
+
+/// 分批执行选中用例：每批一个 pytest 进程（命令行长度受限），
+/// 流式输出共用同一 run_id，结果/计数/时长聚合后统一发出 test-finished。
+async fn run_tests_chunked(
+    app_handle: AppHandle,
+    run_id: String,
+    execution_type: String,
+    project: PathBuf,
+    interpreter: PathBuf,
+    test_cases: Vec<String>,
+    pytest_args: Vec<String>,
+    regression_suite_id: Option<i64>,
+) -> Result<String, String> {
+    let mut base_args = vec![
+        "-m".to_string(),
+        "pytest".to_string(),
+        "-v".to_string(),
+    ];
+    if crate::perf::enabled() {
+        base_args.push("-s".to_string());
+    }
+    base_args.extend(pytest_args);
+    base_args.push("-o".to_string());
+    base_args.push("junit_family=xunit1".to_string());
+
+    let estimate = |args: &[String], extra: &[String]| -> usize {
+        interpreter.to_string_lossy().len()
+            + 2
+            + args.iter().map(|a| a.len() + 3).sum::<usize>()
+            + extra.iter().map(|a| a.len() + 3).sum::<usize>()
+    };
+
+    let base_len = estimate(&base_args, &[]);
+
+    // 按命令行长度把用例拆批
+    let mut batches: Vec<Vec<String>> = Vec::new();
+    let mut current: Vec<String> = Vec::new();
+    let mut current_len = base_len;
+    for case in &test_cases {
+        let add = case.len() + 3;
+        if !current.is_empty() && current_len + add > CHUNK_CMD_LIMIT {
+            batches.push(std::mem::take(&mut current));
+            current_len = base_len;
+        }
+        current.push(case.clone());
+        current_len += add;
+    }
+    if !current.is_empty() || batches.is_empty() {
+        batches.push(current);
+    }
+
+    let mut all_results: Vec<TestResult> = Vec::new();
+    let mut total_duration = 0.0_f64;
+    let mut all_exit_ok = true;
+    let mut last_exit_code: Option<i32> = None;
+    let mut fatal: Option<String> = None;
+    let mut command_display = String::new();
+
+    for (idx, batch) in batches.iter().enumerate() {
+        if run_cancelled(&app_handle, &run_id) {
+            all_exit_ok = false;
+            break;
+        }
+
+        let mut args = base_args.clone();
+        args.extend(batch.iter().cloned());
+        let junit_path = std::env::temp_dir()
+            .join(format!("pytest-{}-{}.xml", run_id, idx));
+        args.push(format!("--junitxml={}", junit_path.to_string_lossy()));
+
+        if command_display.is_empty() {
+            let mut display = interpreter.to_string_lossy().to_string();
+            for a in &args {
+                display.push(' ');
+                display.push_str(a);
+            }
+            command_display = display;
+        }
+
+        match run_pytest_batch(
+            &app_handle,
+            &run_id,
+            &project,
+            &interpreter,
+            &args,
+            &junit_path,
+        )
+        .await
+        {
+            Ok((exit_ok, exit_code, mut results, duration)) => {
+                all_results.append(&mut results);
+                total_duration += duration;
+                all_exit_ok &= exit_ok;
+                last_exit_code = exit_code;
+            }
+            Err(e) => {
+                fatal = Some(e);
+                break;
+            }
+        }
+
+        let _ = std::fs::remove_file(&junit_path);
+    }
+
+    unregister_run(&app_handle, &run_id);
+
+    if batches.len() > 1 {
+        command_display.push_str(&format!(" [{} batches]", batches.len()));
+    }
+
+    let passed = all_results.iter().filter(|r| r.status == "passed").count();
+    let xpassed = all_results.iter().filter(|r| r.status == "xpassed").count();
+    let failed = all_results
+        .iter()
+        .filter(|r| r.status == "failed" || r.status == "error")
+        .count();
+    let skipped = all_results
+        .iter()
+        .filter(|r| r.status == "skipped" || r.status == "xfailed")
+        .count();
+
+    // 仅 strict-xpass（无真实失败）也算通过，与单次运行语义一致
+    let success = fatal.is_none()
+        && (all_exit_ok || (!all_results.is_empty() && failed == 0 && xpassed > 0));
+
+    let _ = app_handle.emit(
+        "test-finished",
+        TestFinishedEvent {
+            run_id: run_id.clone(),
+            success,
+            exit_code: if fatal.is_some() {
+                None
+            } else {
+                last_exit_code
+            },
+            duration: total_duration,
+            passed: passed + xpassed,
+            failed,
+            skipped,
+            results: all_results,
+            command: command_display,
+            execution_type,
+            regression_suite_id,
+        },
+    );
+
+    if let Some(msg) = fatal {
+        return Err(msg);
+    }
+    Ok(run_id)
+}
+
+/// 执行单个 pytest 批次：流式输出 → wait → 解析该批 junit。
+/// register/unregister 由外层统一管理（同一 run_id 跨批保持可取消）。
+async fn run_pytest_batch(
+    app: &AppHandle,
+    run_id: &str,
+    project: &Path,
+    interpreter: &Path,
+    args: &[String],
+    junit_path: &Path,
+) -> Result<(bool, Option<i32>, Vec<TestResult>, f64), String> {
+    let start = std::time::Instant::now();
+
+    let mut child = match AsyncCommand::new(interpreter)
+        .no_console()
+        .current_dir(project)
+        .env("PYTHONPATH", build_python_path(project))
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => return Err(format!("Failed to start pytest: {}", e)),
+    };
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to capture pytest stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to capture pytest stderr".to_string())?;
+
+    register_run(app, run_id, child.id().unwrap_or(0));
+
+    let stdout_handle = app.clone();
+    let stdout_run_id = run_id.to_string();
+    let stdout_task = tokio::spawn(async move {
+        let reader = BufReader::new(stdout);
+        let mut lines = reader.lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let emit_start = tokio::time::Instant::now();
+            let _ = stdout_handle.emit("test-output", TestOutputEvent {
+                run_id: stdout_run_id.clone(),
+                stream: "stdout".to_string(),
+                line,
+            });
+            crate::perf::record_emit(emit_start.elapsed());
+        }
+    });
+
+    let stderr_handle = app.clone();
+    let stderr_run_id = run_id.to_string();
+    let stderr_task = tokio::spawn(async move {
+        let reader = BufReader::new(stderr);
+        let mut lines = reader.lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let emit_start = tokio::time::Instant::now();
+            let _ = stderr_handle.emit("test-output", TestOutputEvent {
+                run_id: stderr_run_id.clone(),
+                stream: "stderr".to_string(),
+                line,
+            });
+            crate::perf::record_emit(emit_start.elapsed());
+        }
+    });
+
+    let status = match child.wait().await {
+        Ok(s) => s,
+        Err(e) => {
+            return Err(format!("Failed waiting for pytest: {}", e));
+        }
+    };
+
+    let _ = stdout_task.await;
+    let _ = stderr_task.await;
+
+    let duration = start.elapsed().as_secs_f64();
+
+    let results = match parse_junit_results(junit_path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Failed to parse JUnit XML: {}", e);
+            vec![]
+        }
+    };
+
+    Ok((status.success(), status.code(), results, duration))
 }
 
 // ============================================

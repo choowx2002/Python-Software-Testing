@@ -5,7 +5,7 @@
  *  - 数据卡片：覆盖率、最近测试结果、环境
  *  - 新手三步工作流引导：生成 → 执行 → 覆盖率（带跳转 CTA）
  */
-import { computed, ref, watch, onBeforeUnmount } from "vue";
+import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -178,6 +178,16 @@ async function subscribeEnvFixStep() {
 onBeforeUnmount(() => {
   unlistenInstall?.();
   unlistenEnvFix?.();
+  window.removeEventListener('testmate:env-check', onEnvCheck);
+});
+
+/** Header 刷新（testmate:env-check）→ 重做环境检测 */
+function onEnvCheck() {
+  void detectEnv();
+}
+
+onMounted(() => {
+  window.addEventListener('testmate:env-check', onEnvCheck);
 });
 
 /** 确保 Python 3.11 并用它（重新）创建 .venv，随后补装剩余缺失依赖并重探测 */

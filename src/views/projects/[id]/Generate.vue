@@ -33,6 +33,7 @@ import {
   XCircle,
 } from "@lucide/vue";
 import { useProjectStore } from "../../../stores/projectStore";
+import { useRunStore } from "../../../stores/runStore";
 import { useUIStore } from "../../../stores/uiStore";
 import TreeItem from "../../../components/TreeItem.vue";
 import { interpretError, type InterpretedError } from "../../../utils/errors";
@@ -49,11 +50,11 @@ import EnvFixWizard from "../../../components/EnvFixWizard.vue";
 import { useTaskbarProgress } from "../../../composables/useTaskbarProgress";
 import { useWindowTitle } from "../../../composables/useWindowTitle";
 import { usePageShortcuts } from "../../../composables/useKeyboardShortcuts";
-import { notifyGenerationComplete } from "../../../composables/useNotifications";
 
 const route = useRoute();
 const router = useRouter();
 const projectStore = useProjectStore();
+const runStore = useRunStore();
 const uiStore = useUIStore();
 const { t } = useI18n();
 
@@ -693,18 +694,6 @@ async function setupGenerationListeners() {
       resetWinStatus();
       void refreshMissingImports();
 
-      // 完成后系统通知（长任务在后台时提醒用户）
-      if (currentProject.value?.name) {
-        const okCount = event.payload.generatedFiles.filter(
-          (f) => f.status === "success",
-        ).length;
-        void notifyGenerationComplete(
-          currentProject.value.name,
-          event.payload.success,
-          okCount,
-        );
-      }
-
       if (!event.payload.success && event.payload.generatedFiles.length === 0) {
         generationOutput.value.push({
           runId: event.payload.runId,
@@ -712,36 +701,6 @@ async function setupGenerationListeners() {
           line: t("generate.logs.systemWarning"),
           logId: logCounter++,
         });
-      }
-
-      // 持久化生成历史（NFR008：走 Rust 类型化命令）+ 文件明细
-      if (currentProject.value?.id) {
-        const generatedCount = event.payload.generatedFiles.filter(
-          (f) => f.status === "success",
-        ).length;
-        try {
-          const generationId = await invoke<number>("save_generation_history", {
-            projectId: currentProject.value.id,
-            generationStatus: event.payload.success ? "success" : "failed",
-            totalFiles: event.payload.generatedFiles.length,
-            generatedFiles: generatedCount,
-            duration: event.payload.duration,
-            command: event.payload.command || null,
-          });
-          if (event.payload.generatedFiles.length > 0) {
-            await invoke("save_generation_file_details", {
-              generationId,
-              files: event.payload.generatedFiles.map((f) => ({
-                name: f.name,
-                relativePath: f.relativePath || null,
-                testCaseCount: f.testCaseCount,
-                status: f.status,
-              })),
-            });
-          }
-        } catch (e) {
-          console.error("[Generate] save history failed:", e);
-        }
       }
 
       // 生成结束后刷新环境状态（用户可能中途修复了依赖）
@@ -855,6 +814,13 @@ async function confirmFixBom() {
 /** 实际启动 Pynguin 生成 */
 async function startGeneration(projectPath: string, interpreterPath: string) {
   resetGenerationState();
+
+  if (currentProject.value?.id && currentProject.value.name) {
+    runStore.prepare("generate", {
+      projectId: currentProject.value.id,
+      projectName: currentProject.value.name,
+    });
+  }
 
   try {
     await invoke("generate_tests", {
@@ -1018,6 +984,33 @@ function fileStatusLabel(status: GeneratedFile["status"]) {
 /* Watchers / lifecycle                                                       */
 /* -------------------------------------------------------------------------- */
 
+/** 最近一次本页 run 在"后台完成"的快照回显 */
+const adoptedRunId = ref<string | null>(null);
+
+function adoptBackgroundResult() {
+  const pid = projectId.value;
+  if (Number.isNaN(pid)) return;
+  if (isGenerating.value) return;
+  if (runStore.activeForProject(pid).length > 0) return;
+
+  const snap = runStore.lastRun(pid, "generate");
+  if (!snap || snap.runId === adoptedRunId.value) return;
+  if (generationStatus.value !== "idle") return;
+  if (!snap.success && (snap.generatedFiles?.length ?? 0) === 0) return;
+
+  adoptedRunId.value = snap.runId;
+  generationStatus.value = snap.status === "completed" ? "completed" : "failed";
+  elapsedTime.value = snap.duration;
+  isStopping.value = false;
+  generatedFiles.value = (snap.generatedFiles ?? []).map((f) => ({
+    name: f.name,
+    path: "",
+    relativePath: f.relativePath ?? "",
+    testCaseCount: f.testCaseCount,
+    status: f.status as GeneratedFile["status"],
+  }));
+}
+
 watch(
   sourceFiles,
   (files) => {
@@ -1031,6 +1024,7 @@ watch(
     if (!project) return;
 
     resetGenerationState();
+    adoptedRunId.value = null;
     selectedSourceFiles.value = [];
     sourceSearch.value = "";
     envIssueDismissed.value = false;
@@ -1053,9 +1047,28 @@ watch(
   { immediate: true },
 );
 
+// 后台完成的生成结果 → 自动回显
+watch(
+  () => {
+    const pid = projectId.value;
+    if (Number.isNaN(pid)) return undefined;
+    return runStore.lastRun(pid, "generate")?.runId;
+  },
+  () => {
+    adoptBackgroundResult();
+  },
+  { immediate: true },
+);
+
+function onEnvCheck() {
+  void refreshGenEnv();
+  void refreshMissingImports();
+}
+
 onMounted(() => {
   void setupGenerationListeners();
   window.addEventListener('testmate:focus-search', onFocusSearch);
+  window.addEventListener('testmate:env-check', onEnvCheck);
 });
 
 // Ctrl+` 展开/收起终端
@@ -1072,6 +1085,7 @@ onUnmounted(() => {
   unlistenOutput?.();
   unlistenFinished?.();
   window.removeEventListener('testmate:focus-search', onFocusSearch);
+  window.removeEventListener('testmate:env-check', onEnvCheck);
 });
 
 const sourceSearchInput = ref<HTMLInputElement | null>(null);
