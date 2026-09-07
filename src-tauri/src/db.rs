@@ -12,6 +12,8 @@ fn db_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
         .path()
         .app_config_dir()
         .map_err(|e| format!("Failed to resolve app config directory: {}", e))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create app config directory: {}", e))?;
     Ok(dir.join("pytest_auto.db"))
 }
 
