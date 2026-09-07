@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
-use sqlx::sqlite::SqlitePool;
-use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use tauri::AppHandle;
 use tauri::Manager;
 
@@ -21,9 +20,10 @@ pub async fn pool(app: &AppHandle) -> Result<SqlitePool, String> {
     let path = db_path(app)?;
     SqlitePoolOptions::new()
         .max_connections(4)
-        .connect(
-            path.to_str()
-                .ok_or_else(|| "Invalid database path".to_string())?,
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true),
         )
         .await
         .map_err(|e| format!("Failed to open database: {}", e))
