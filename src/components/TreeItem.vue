@@ -7,6 +7,7 @@ import {
   Folder,
   FolderOpen,
   FileCode2,
+  AlertTriangle,
 } from "@lucide/vue";
 
 // 递归组件需要显式声明 name (Vue 3.3+)
@@ -27,6 +28,8 @@ const props = defineProps<{
   expandedDirs: Set<string>;
   selectedFiles: string[];
   disabled?: boolean;
+  blockedFiles?: string[];
+  blockedTip?: string;
 }>();
 
 const emit = defineEmits<{
@@ -38,6 +41,9 @@ const emit = defineEmits<{
 const isExpanded = computed(() => props.expandedDirs.has(props.node.path));
 const isSelected = computed(() =>
   props.selectedFiles.includes(props.node.relativePath)
+);
+const isBlocked = computed(() =>
+  props.blockedFiles?.includes(props.node.relativePath) ?? false
 );
 
 function onContextMenu(ev: MouseEvent) {
@@ -79,12 +85,14 @@ function onContextMenu(ev: MouseEvent) {
       <template v-else>
         <button
           type="button"
-          :disabled="disabled"
+          :disabled="disabled || isBlocked"
           class="flex h-4 w-4 shrink-0 items-center justify-center rounded border transition disabled:cursor-not-allowed"
           :class="
             isSelected
               ? 'border-brand-500 bg-brand-500 text-white'
-              : 'border-slate-300 bg-white'
+              : isBlocked
+                ? 'border-amber-200 bg-amber-50'
+                : 'border-slate-300 bg-white'
           "
           @click="emit('toggle-file', node.relativePath)"
         >
@@ -95,12 +103,19 @@ function onContextMenu(ev: MouseEvent) {
 
         <button
           type="button"
-          :disabled="disabled"
-          class="min-w-0 flex-1 truncate text-left text-sm text-slate-800 disabled:cursor-not-allowed"
+          :disabled="disabled || isBlocked"
+          :title="isBlocked ? blockedTip : undefined"
+          class="min-w-0 flex-1 truncate text-left text-sm disabled:cursor-not-allowed"
+          :class="isBlocked ? 'text-amber-600' : 'text-slate-800'"
           @click="emit('toggle-file', node.relativePath)"
         >
           {{ node.name }}
         </button>
+
+        <AlertTriangle
+          v-if="isBlocked"
+          class="h-4 w-4 shrink-0 text-amber-500"
+        />
       </template>
     </div>
 
@@ -113,6 +128,8 @@ function onContextMenu(ev: MouseEvent) {
         :expanded-dirs="expandedDirs"
         :selected-files="selectedFiles"
         :disabled="disabled"
+        :blocked-files="blockedFiles"
+        :blocked-tip="blockedTip"
         @toggle-dir="emit('toggle-dir', $event)"
         @toggle-file="emit('toggle-file', $event)"
         @context-menu="emit('context-menu', $event)"

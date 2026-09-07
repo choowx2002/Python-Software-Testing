@@ -13,6 +13,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useRoute, useRouter } from "vue-router";
 import {
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -192,6 +193,10 @@ const sourceFiles = ref<SourceFile[]>([]);
 const selectedSourceFiles = ref<string[]>([]);
 const sourceTree = ref<TreeNode[]>([]);
 const expandedDirs = ref<Set<string>>(new Set());
+
+/* 顶层阻塞代码（模块 import 即卡死，如 while True CLI）命中清单 */
+const blockedFiles = ref<string[]>([]);
+const blockedTipText = computed(() => t("generate.blockedTooltip"));
 
 const isLoadingSources = ref(false);
 const sourceScanError = ref<InterpretedError | null>(null);
@@ -452,8 +457,13 @@ function buildSourceTree(files: SourceFile[]): TreeNode[] {
   return root;
 }
 
+function isFileBlocked(path: string) {
+  return blockedFiles.value.includes(path);
+}
+
 function toggleFile(path: string) {
   if (isGenerating.value) return;
+  if (isFileBlocked(path)) return;
 
   const index = selectedSourceFiles.value.indexOf(path);
 
@@ -481,7 +491,9 @@ const estimatedTimeout = computed(() => {
 function selectAllVisible() {
   if (isGenerating.value) return;
 
-  const paths = filteredSourceFiles.value.map((f) => f.relativePath);
+  const paths = filteredSourceFiles.value
+    .filter((f) => !isFileBlocked(f.relativePath))
+    .map((f) => f.relativePath);
   selectedSourceFiles.value = Array.from(
     new Set([...selectedSourceFiles.value, ...paths]),
   );
@@ -493,11 +505,12 @@ function clearSelection() {
 }
 
 const allVisibleSelected = computed(() => {
-  if (filteredSourceFiles.value.length === 0) return false;
-
-  return filteredSourceFiles.value.every((f) =>
-    selectedSourceFiles.value.includes(f.relativePath),
+  const visible = filteredSourceFiles.value.filter(
+    (f) => !isFileBlocked(f.relativePath),
   );
+  if (visible.length === 0) return false;
+
+  return visible.every((f) => selectedSourceFiles.value.includes(f.relativePath));
 });
 
 /* -------------------------------------------------------------------------- */
@@ -734,6 +747,7 @@ async function scanSourceFiles() {
 
   isLoadingSources.value = true;
   sourceScanError.value = null;
+  blockedFiles.value = [];
 
   try {
     sourceFiles.value = await invoke<SourceFile[]>("scan_source_files", {
@@ -741,6 +755,27 @@ async function scanSourceFiles() {
     });
 
     sourceTree.value = buildSourceTree(sourceFiles.value);
+
+    const interpreterPath = currentProject.value?.interpreter_path;
+    if (interpreterPath && sourceFiles.value.length) {
+      try {
+        const list = await invoke<{ relativePath: string; reason: string }[]>(
+          "check_generation_blockers",
+          {
+            projectPath,
+            interpreterPath,
+            files: sourceFiles.value.map((f) => f.relativePath),
+          },
+        );
+        blockedFiles.value = list.map((b) => b.relativePath);
+      } catch (error) {
+        console.error("[Generate] check_generation_blockers failed:", error);
+      }
+    }
+
+    selectedSourceFiles.value = selectedSourceFiles.value.filter(
+      (p) => !isFileBlocked(p),
+    );
   } catch (error) {
     console.error("[Generate] Failed to scan source files:", error);
     sourceScanError.value = interpretError(error);
@@ -1237,6 +1272,21 @@ function onFocusSearch() {
             </AppButton>
           </div>
 
+          <div
+            v-if="blockedFiles.length"
+            class="mx-3 mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700"
+          >
+            <div class="flex items-start gap-2">
+              <AlertTriangle class="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+              <div class="min-w-0">
+                <p class="font-medium">{{ t("generate.blockingTitle") }}</p>
+                <p class="mt-0.5 text-[11px] leading-4 text-amber-600">
+                  {{ t("generate.blockingDesc", { count: blockedFiles.length }) }}
+                </p>
+              </div>
+            </div>
+          </div>
+
           <div class="max-h-80 overflow-auto">
             <div v-if="isLoadingSources" class="px-4 py-10 text-center text-sm text-zinc-500">
               <Loader2 class="mx-auto mb-2 h-5 w-5 animate-spin" />
@@ -1267,6 +1317,8 @@ function onFocusSearch() {
                 :expanded-dirs="expandedDirs"
                 :selected-files="selectedSourceFiles"
                 :disabled="isGenerating"
+                :blocked-files="blockedFiles"
+                :blocked-tip="blockedTipText"
                 @toggle-dir="toggleDir"
                 @toggle-file="toggleFile"
                 @context-menu="showSourceMenu($event.node, $event.ev)"

@@ -1,9 +1,9 @@
 use crate::state::AppState;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use tokio::process::Command as AsyncCommand;
-use std::process::Stdio;
 use tauri::AppHandle;
 use tauri::Emitter;
 use tauri::Manager;
@@ -12,6 +12,12 @@ use uuid::Uuid;
 
 use super::*;
 use crate::proc::NoConsole;
+
+/// 单模块 Pynguin 运行的最大耗时兜底：`--maximum-search-time` 之后追加的宽限秒数。
+/// Pynguin 若在 import 被测模块时卡住（顶层 while True / 阻塞调用），
+/// 搜索计时尚未开始，只有硬超时能终止它。
+const PER_MODULE_TIMEOUT_GRACE_SECS: u64 = 180;
+
 // ============================================
 // Generate Tests Data Structures
 // ============================================
@@ -222,6 +228,38 @@ pub async fn generate_tests(
         },
     );
 
+    let mut blocked_set = std::collections::HashSet::new();
+    match detect_blocking_modules(&project, &interpreter_path, &source_files) {
+        Ok(list) => {
+            for (rel, _) in &list {
+                blocked_set.insert(rel.clone());
+            }
+            if !list.is_empty() {
+                let _ = app_handle.emit(
+                    "generation-output",
+                    GenerationOutputEvent {
+                        run_id: run_id.clone(),
+                        stream: "stdout".to_string(),
+                        line: format!(
+                            "\n[Notice] {} file(s) skipped — module-level infinite loop / blocking code detected (importing them would hang Pynguin).\n",
+                            list.len()
+                        ),
+                    },
+                );
+            }
+        }
+        Err(e) => {
+            let _ = app_handle.emit(
+                "generation-output",
+                GenerationOutputEvent {
+                    run_id: run_id.clone(),
+                    stream: "stderr".to_string(),
+                    line: format!("[Warn] Blocking-code pre-scan failed (continuing anyway): {}", e),
+                },
+            );
+        }
+    }
+
     let output_base = project.join(&output_folder);
     std::fs::create_dir_all(&output_base)
         .map_err(|e| format!("Failed to create output directory: {}", e))?;
@@ -250,6 +288,21 @@ pub async fn generate_tests(
             );
             overall_success = false;
             break;
+        }
+
+        if blocked_set.contains(rel_path) {
+            let _ = app_handle.emit(
+                "generation-output",
+                GenerationOutputEvent {
+                    run_id: run_id.clone(),
+                    stream: "stdout".to_string(),
+                    line: format!(
+                        "\n[Skip] {} — module-level infinite loop / blocking code; Pynguin import would hang. Skipped.\n",
+                        rel_path
+                    ),
+                },
+            );
+            continue;
         }
 
         let file_path = project.join(rel_path);
@@ -457,9 +510,37 @@ pub async fn generate_tests(
             }
         });
 
-        let status = child.wait().await;
+        let pid = child.id().unwrap_or(0);
+        let timeout_budget = max_search_time.saturating_add(PER_MODULE_TIMEOUT_GRACE_SECS);
+        let wait_result = tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_budget),
+            child.wait(),
+        )
+        .await;
+        let timed_out = wait_result.is_err();
+        let status = match wait_result {
+            Ok(result) => result,
+            Err(_) => {
+                let _ = crate::state::terminate_pid(pid, true);
+                child.wait().await
+            }
+        };
         let _ = stdout_task.await;
         let _ = stderr_task.await;
+
+        if timed_out {
+            let _ = app_handle.emit(
+                "generation-output",
+                GenerationOutputEvent {
+                    run_id: run_id.clone(),
+                    stream: "stderr".to_string(),
+                    line: format!(
+                        "\n[Timeout] {} — killed after {}s. Module-level blocking code (e.g. while True at import) likely prevents Pynguin from finishing.\n",
+                        module_name, timeout_budget
+                    ),
+                },
+            );
+        }
 
         let combined_output = module_output
             .lock()
@@ -719,4 +800,157 @@ pub async fn strip_python_bom(
     }
 
     Ok(fixed)
+}
+
+// ============================================
+// 顶层阻塞代码预扫描（Pynguin 兼容性）
+// Pynguin 生成前会 import 被测模块；若模块顶层就是 while True 交互式 CLI
+// （未受 if __name__ == "__main__" 保护），import 即卡死，--maximum-search-time
+// 不覆盖该阶段。此检测用被测项目解释器做 AST 静态判定，命中文件在生成前跳过，
+// 另由 generate_tests 的硬超时兜底。
+// ============================================
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedModule {
+    pub relative_path: String,
+    pub reason: String,
+}
+
+/// 返回命中列表：(相对路径, 原因码)。原因码见前端文案映射。
+fn detect_blocking_modules(
+    root: &Path,
+    interpreter_path: &str,
+    files: &[String],
+) -> Result<Vec<(String, String)>, String> {
+    let script = r#"
+import ast, json, os, sys
+
+root = sys.argv[1]
+paths = sys.argv[2:]
+
+def is_main_guard(node):
+    if not isinstance(node, ast.If):
+        return False
+    t = node.test
+    return (
+        isinstance(t, ast.Compare)
+        and isinstance(t.left, ast.Name)
+        and t.left.id == "__name__"
+        and len(t.ops) == 1
+        and isinstance(t.ops[0], ast.Eq)
+        and len(t.comparators) == 1
+        and isinstance(t.comparators[0], ast.Constant)
+        and t.comparators[0].value == "__main__"
+    )
+
+def contains_infinite_while(stmts):
+    for n in ast.walk(ast.Module(body=list(stmts), type_ignores=[])):
+        if isinstance(n, ast.While):
+            return True
+    return False
+
+def funcs_of(tree):
+    return {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+def scan(stmts, funcs, allow):
+    hits = []
+    for node in stmts:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        if is_main_guard(node):
+            continue
+        if allow and isinstance(node, ast.While):
+            hits.append("top_level_loop")
+        call = node.value if isinstance(node, ast.Expr) else node
+        if allow and isinstance(call, ast.Call):
+            fn = call.func
+            name = fn.id if isinstance(fn, ast.Name) else None
+            if name and name in funcs and contains_infinite_while(funcs[name].body):
+                hits.append("calls_blocking_func")
+        child_allow = allow
+        if isinstance(node, ast.While):
+            continue
+        if isinstance(node, ast.If):
+            const = isinstance(node.test, ast.Constant)
+            child_allow = allow and const and bool(node.test.value)
+        lists = list(getattr(node, "body", []))
+        lists += list(getattr(node, "orelse", []))
+        if isinstance(node, ast.Try):
+            for h in node.handlers:
+                lists += list(h.body)
+            lists += list(getattr(node, "finalbody", []))
+        for child in lists:
+            hits += scan([child], funcs, child_allow)
+    return hits
+
+out = []
+for rel in paths:
+    fp = os.path.join(root, rel.replace("/", os.sep))
+    if not os.path.isfile(fp):
+        continue
+    try:
+        with open(fp, "r", encoding="utf-8-sig") as fh:
+            tree = ast.parse(fh.read(), filename=fp)
+    except Exception:
+        continue
+    funcs = funcs_of(tree)
+    hits = scan(tree.body, funcs, True)
+    if hits:
+        out.append({"relative_path": rel, "reason": hits[0]})
+
+print(json.dumps(out))
+"#;
+
+    let mut cmd = Command::new(interpreter_path);
+    cmd.no_console();
+    cmd.arg("-c").arg(script).arg(root);
+    for f in files {
+        cmd.arg(f);
+    }
+    cmd.current_dir(root).env("PYTHONPATH", build_python_path(root));
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to run blocking-code scan: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: Vec<serde_json::Value> = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("Failed to parse blocking-code scan result: {}", e))?;
+
+    Ok(json
+        .into_iter()
+        .filter_map(|v| {
+            let rel = v.get("relative_path").and_then(|x| x.as_str())?.to_string();
+            let reason = v
+                .get("reason")
+                .and_then(|x| x.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            Some((rel, reason))
+        })
+        .collect())
+}
+
+/// 预扫描选中的源文件，返回「import 即会卡死」的模块清单（供 Generate 页禁用）。
+#[tauri::command]
+pub async fn check_generation_blockers(
+    project_path: String,
+    interpreter_path: String,
+    files: Vec<String>,
+) -> Result<Vec<BlockedModule>, String> {
+    let root = PathBuf::from(&project_path);
+    if !root.is_dir() {
+        return Err(format!("Project directory not found: {}", project_path));
+    }
+
+    let list = detect_blocking_modules(&root, &interpreter_path, &files)?;
+    Ok(list
+        .into_iter()
+        .map(|(relative_path, reason)| BlockedModule { relative_path, reason })
+        .collect())
 }

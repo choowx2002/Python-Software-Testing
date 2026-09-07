@@ -627,6 +627,10 @@ export default {
       "bytecode 0.17.0 与 Python 3.12 上的 Pynguin 不兼容。若生成失败，可尝试：pip install bytecode==0.15.1",
     py312Warning:
       "检测到 Python 3.12——Pynguin（测试生成）在 3.12 上存在已知兼容性问题。推荐安装 Python 3.11 并重建环境。",
+    blockingTitle: "检测到可能阻塞生成的模块",
+    blockingDesc:
+      "{count} 个模块的顶层含 while 死循环 / 阻塞代码。Pynguin 需先 import 被测模块，此类模块会被卡死，已自动禁用。",
+    blockedTooltip: "顶层含 while 死循环/阻塞代码，导入即卡死，已跳过",
   },
   envfix: {
     run: "安装 Python 3.11 并重建环境",

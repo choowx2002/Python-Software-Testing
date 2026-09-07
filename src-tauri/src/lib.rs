@@ -101,6 +101,7 @@ pub fn run() {
             commands::env::clone_repository,
             commands::env::validate_project_interpreter,
             commands::files::open_in_file_manager,
+            commands::generation::check_generation_blockers,
             commands::generation::scan_source_files,
             commands::generation::generate_tests,
             commands::generation::check_python_bom,

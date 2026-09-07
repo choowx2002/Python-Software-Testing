@@ -627,6 +627,10 @@ reviewStep: {
       "bytecode 0.17.0 is incompatible with Pynguin on Python 3.12. If generation fails, try: pip install bytecode==0.15.1",
     py312Warning:
       "Python 3.12 detected — Pynguin (test generation) has known issues on 3.12. Recommended: install Python 3.11 and rebuild the environment.",
+    blockingTitle: "Potentially blocking modules detected",
+    blockingDesc:
+      "{count} module(s) contain a module-level infinite loop / blocking code. Pynguin must import the module under test first, which would hang — they have been disabled automatically.",
+    blockedTooltip: "Module-level while loop / blocking code — import would hang; skipped",
   },
   envfix: {
     run: "Install Python 3.11 & rebuild env",
