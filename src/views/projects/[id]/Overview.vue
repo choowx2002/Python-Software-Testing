@@ -156,7 +156,7 @@ async function subscribeInstallStep() {
   );
 }
 
-/** 一键修复（fix_python_env）的阶段性提示：winget/venv/deps/db/done */
+/** 一键修复（fix_python_env）的阶段性提示：winget/download/venv/deps/db/done */
 async function subscribeEnvFixStep() {
   unlistenEnvFix?.();
   unlistenEnvFix = await listen<{ stage: string; status: string }>(
@@ -168,6 +168,7 @@ async function subscribeEnvFixStep() {
         return;
       }
       if (stage === "winget") envFixNote.value = t("overview.envStageWinget");
+      else if (stage === "download") envFixNote.value = t("overview.envStageDownload");
       else if (stage === "venv") envFixNote.value = t("overview.envStageVenv");
       else if (stage === "deps") envFixNote.value = t("overview.envStageDeps");
       else if (stage === "db") envFixNote.value = t("overview.envStageDb");

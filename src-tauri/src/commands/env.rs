@@ -1,3 +1,4 @@
+use std::env::consts::ARCH;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tokio::process::Command as AsyncCommand;
@@ -429,7 +430,8 @@ pub async fn check_generation_env(
 // ============================================
 
 /// 定位可用的 Python 3.11 解释器
-fn resolve_python_311() -> Option<String> {
+/// 检测顺序：Windows py launcher → PATH python3.11 → pyenv / uv → 应用托管目录
+fn resolve_python_311(managed: Option<&Path>) -> Option<String> {
     // 1) Windows py launcher / 常见安装路径
     if cfg!(target_os = "windows") {
         if let Ok(output) = Command::new("py")
@@ -460,6 +462,7 @@ fn resolve_python_311() -> Option<String> {
                 }
             }
         }
+        return None;
     }
 
     // 2) Unix / PATH 中的 python3.11
@@ -475,12 +478,265 @@ fn resolve_python_311() -> Option<String> {
             }
         }
     }
+
+    // 3) pyenv / uv 托管解释器
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        if let Some(py) = find_python311_in(&home.join(".pyenv").join("versions"), "3.11") {
+            return Some(py);
+        }
+        let uv_root = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".local").join("share"));
+        if let Some(py) = find_python311_in(&uv_root.join("uv").join("python"), "cpython-3.11") {
+            return Some(py);
+        }
+    }
+
+    // 4) 应用托管目录（本应用下载的 python-build-standalone）
+    if let Some(dir) = managed {
+        if let Some(py) = find_python311_in(dir, "cpython-3.11") {
+            return Some(py);
+        }
+    }
     None
 }
 
-/// 一键修复：winget 安装 Python 3.11（如需）→ 重建 .venv → 安装依赖 → 更新项目解释器
+/// 解释器可执行且能正常返回 sys.executable
+fn python_executable_ok(py: &Path) -> bool {
+    if !py.is_file() {
+        return false;
+    }
+    Command::new(py)
+        .no_console()
+        .args(["-c", "import sys; print(sys.executable)"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// 在 root 的下一级目录中（前缀匹配）寻找 3.11 解释器
+fn find_python311_in(root: &Path, prefix: &str) -> Option<String> {
+    let Ok(read) = std::fs::read_dir(root) else {
+        return None;
+    };
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for entry in read.flatten() {
+        let Ok(ft) = entry.file_type() else {
+            continue;
+        };
+        if !ft.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with(prefix) {
+            dirs.push(entry.path());
+        }
+    }
+    for dir in dirs {
+        for rel in ["bin/python3.11", "python/bin/python3.11", "bin/python3"] {
+            let cand = dir.join(rel);
+            if python_executable_ok(&cand) {
+                return Some(cand.to_string_lossy().to_string());
+            }
+        }
+    }
+    None
+}
+
+/// 应用托管目录：python-build-standalone 下载解压位置
+fn managed_python_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("python"))
+}
+
+// ============================================
+// Linux / macOS 用户级自动安装 Python 3.11
+// ============================================
+
+/// 固定使用 python-build-standalone（astral-sh）的 CPython 3.11
+const PY311_RELEASE: &str = "3.11.16";
+const PY311_TAG: &str = "20260901";
+
+/// 当前平台/架构对应的 python-build-standalone target triple
+fn standalone_triple() -> Option<&'static str> {
+    if cfg!(target_os = "macos") {
+        return match ARCH {
+            "x86_64" => Some("x86_64-apple-darwin"),
+            "aarch64" => Some("aarch64-apple-darwin"),
+            _ => None,
+        };
+    }
+    if cfg!(target_os = "linux") {
+        return match ARCH {
+            "x86_64" => Some("x86_64-unknown-linux-gnu"),
+            "aarch64" => Some("aarch64-unknown-linux-gnu"),
+            _ => None,
+        };
+    }
+    None
+}
+
+/// 递归（限深）在目录中找一个可运行的 python3.11 / python3
+fn find_python_exe_recursive(dir: &Path, depth: usize) -> Option<PathBuf> {
+    if depth == 0 {
+        return None;
+    }
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return None;
+    };
+    for entry in read.flatten() {
+        let path = entry.path();
+        let Ok(ft) = entry.file_type() else {
+            continue;
+        };
+        if ft.is_dir() {
+            if let Some(py) = find_python_exe_recursive(&path, depth - 1) {
+                return Some(py);
+            }
+        } else if ft.is_file() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name == "python3.11" || name == "python3" {
+                if python_executable_ok(&path) {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 下载并解压 python-build-standalone 的 CPython 3.11（无需 root，用户级安装）。
+/// 任一步失败都会清理残留，并返回含人工安装指引的错误。
+async fn install_python_311_unix(
+    managed_dir: &Path,
+    emit: &(dyn Fn(&str, &str, &str) + Sync),
+) -> Result<String, String> {
+    let triple = standalone_triple().ok_or_else(|| {
+        "Automatic download is not supported on this platform/architecture. \
+         Please install Python 3.11 manually (e.g. `sudo apt install python3.11` / \
+         `brew install python@3.11` / via python.org) and retry."
+            .to_string()
+    })?;
+
+    let name = format!("cpython-{PY311_RELEASE}+{PY311_TAG}-{triple}");
+    let dest_dir = managed_dir.join(&name);
+    let exe_candidates = [
+        dest_dir.join("python").join("bin").join("python3.11"),
+        dest_dir.join("bin").join("python3.11"),
+        dest_dir.join("python").join("bin").join("python3"),
+    ];
+
+    // 已下载过：直接复用，不重复下载
+    for cand in &exe_candidates {
+        if python_executable_ok(cand) {
+            emit("download", "success", "Python 3.11 already downloaded.");
+            return Ok(cand.to_string_lossy().to_string());
+        }
+    }
+
+    emit("download", "running", "Downloading Python 3.11...");
+
+    if let Err(e) = std::fs::create_dir_all(&dest_dir) {
+        let _ = std::fs::remove_dir_all(&dest_dir);
+        return Err(format!("Failed to create Python directory: {}", e));
+    }
+    let archive = dest_dir.join("python.tar.gz");
+
+    let url = format!(
+        "https://github.com/astral-sh/python-build-standalone/releases/download/{PY311_TAG}/{name}-install_only.tar.gz"
+    );
+
+    // 下载：curl 优先，回退 wget
+    let curl_ok = match AsyncCommand::new("curl")
+        .no_console()
+        .args(["-fL", "--connect-timeout", "20"])
+        .arg(&url)
+        .arg("-o")
+        .arg(&archive)
+        .output()
+        .await
+    {
+        Ok(o) => o.status.success(),
+        Err(_) => false,
+    };
+    let downloaded = if curl_ok {
+        true
+    } else {
+        match AsyncCommand::new("wget")
+            .no_console()
+            .args(["-q", "--timeout", "20"])
+            .arg("-O")
+            .arg(&archive)
+            .arg(&url)
+            .output()
+            .await
+        {
+            Ok(o) => o.status.success(),
+            Err(_) => false,
+        }
+    };
+
+    if !downloaded {
+        let _ = std::fs::remove_file(&archive);
+        let _ = std::fs::remove_dir_all(&dest_dir);
+        return Err(
+            "Failed to download Python 3.11 (is `curl`/`wget` installed and is GitHub reachable?). \
+             Please install Python 3.11 manually (e.g. `sudo apt install python3.11` / \
+             `brew install python@3.11` / via python.org) and retry."
+                .to_string(),
+        );
+    }
+
+    // 解压
+    let extract_ok = match AsyncCommand::new("tar")
+        .no_console()
+        .args(["-xzf"])
+        .arg(&archive)
+        .arg("-C")
+        .arg(&dest_dir)
+        .output()
+        .await
+    {
+        Ok(o) => o.status.success(),
+        Err(_) => false,
+    };
+    let _ = std::fs::remove_file(&archive);
+
+    if !extract_ok {
+        let _ = std::fs::remove_dir_all(&dest_dir);
+        return Err(
+            "Failed to extract Python 3.11 (is `tar` installed?). \
+             Please install Python 3.11 manually (e.g. `sudo apt install python3.11` / \
+             `brew install python@3.11` / via python.org) and retry."
+                .to_string(),
+        );
+    }
+
+    // 定位解释器并校验
+    let py = exe_candidates
+        .iter()
+        .find(|c| python_executable_ok(c))
+        .cloned()
+        .or_else(|| find_python_exe_recursive(&dest_dir, 4));
+
+    match py {
+        Some(p) => {
+            emit("download", "success", "Python 3.11 installed.");
+            Ok(p.to_string_lossy().to_string())
+        }
+        None => {
+            let _ = std::fs::remove_dir_all(&dest_dir);
+            Err("Downloaded archive did not contain a runnable Python 3.11. \
+                 Please install Python 3.11 manually (e.g. `sudo apt install python3.11` / \
+                 `brew install python@3.11` / via python.org) and retry."
+                .to_string())
+        }
+    }
+}
+
+/// 一键修复：自动安装 Python 3.11（Windows winget；Linux/macOS 用户级下载）
+/// → 重建 .venv → 安装依赖 → 更新项目解释器
 /// project_id 为空时（Import 流程）跳过数据库更新，由前端重新检测。
-/// 进度通过 "env-fix-step" 事件逐阶段推送。
+/// 进度通过 "env-fix-step" 事件逐阶段推送（stage: winget / download / venv / deps / db / done）。
 #[tauri::command]
 pub async fn fix_python_env(
     app: tauri::AppHandle,
@@ -498,8 +754,11 @@ pub async fn fix_python_env(
         );
     };
 
-    // 1) 定位 Python 3.11；缺失时 Windows 用 winget 静默安装，其它平台给出安装指引
-    if resolve_python_311().is_none() {
+    // 1) 定位 Python 3.11；缺失时自动安装
+    //    Windows 用 winget 静默安装；Linux / macOS 用户级下载 python-build-standalone
+    let managed = managed_python_dir(&app);
+
+    if resolve_python_311(managed.as_deref()).is_none() {
         if cfg!(target_os = "windows") {
             emit("winget", "running", "Installing Python 3.11 via winget...");
             let output = AsyncCommand::new("winget")
@@ -526,18 +785,21 @@ pub async fn fix_python_env(
             }
             emit("winget", "success", "Python 3.11 installed.");
         } else {
-            return Err(
-                "Python 3.11 is required (Pynguin 0.43+ is incompatible with Python 3.12+). \
-                 Please install python3.11 (e.g. `sudo apt install python3.11` / `brew install python@3.11` \
-                 or via python.org), then retry."
-                    .to_string(),
-            );
+            let managed_dir = managed.as_ref().ok_or_else(|| {
+                "Cannot determine the app data directory. Please install Python 3.11 manually \
+                 (e.g. `sudo apt install python3.11` / `brew install python@3.11` / via python.org) \
+                 and retry."
+                    .to_string()
+            })?;
+            install_python_311_unix(managed_dir, &emit).await?;
         }
-    } else {
+    } else if cfg!(target_os = "windows") {
         emit("winget", "success", "Python 3.11 already installed.");
+    } else {
+        emit("download", "success", "Python 3.11 already installed.");
     }
 
-    let py311 = resolve_python_311()
+    let py311 = resolve_python_311(managed.as_deref())
         .ok_or_else(|| "Python 3.11 not found after installation. Please install it manually from python.org.".to_string())?;
 
     let root = PathBuf::from(&project_path);

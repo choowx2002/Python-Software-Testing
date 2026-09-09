@@ -56,10 +56,26 @@ const missingDeps = computed(() => {
     .map(d => d.name)
 })
 
+/** 与 Overview 一致：当前解释器是否为 Python 3.11（Pynguin 0.43+ 兼容版本） */
+const isPython311 = computed(() =>
+  (envResult.value?.pythonVersion ?? '').startsWith('Python 3.11'),
+)
+
+/** 已检测到解释器但非 3.11 → 需要 3.11 环境
+ *  覆盖「已有非 3.11 venv」与「将用非 3.11 解释器建 venv」两种场景 */
+const needs311Fix = computed(() =>
+  Boolean(
+    envResult.value?.pythonPath &&
+      envResult.value?.pythonVersion &&
+      !isPython311.value,
+  ),
+)
+
 const isEnvReady = computed(() => {
   const env = envResult.value
   if (!env) return false
   if (!env.venvExists) return false
+  if (!isPython311.value) return false
   return missingDeps.value.length === 0
 })
 
@@ -68,15 +84,9 @@ const envStatus = computed<'Ready' | 'Warning' | 'Failed' | 'Action Required'>((
   if (!env) return 'Failed'
   if (!env.pythonPath) return 'Failed'
   if (!env.venvExists) return 'Action Required'
+  if (!isPython311.value) return 'Action Required'
   if (missingDeps.value.length > 0) return 'Warning'
   return 'Ready'
-})
-
-/** Python 3.12+ → Pynguin 生成测试有已知兼容性问题，提醒用户一键换 3.11 */
-const pyVersionRisk = computed(() => {
-  const v = envResult.value?.pythonVersion ?? ''
-  const m = v.match(/3\.(\d+)/)
-  return !!m && Number(m[1]) >= 12
 })
 
 /** 一键修复完成后重新检测环境 */
@@ -269,7 +279,7 @@ function isPhase(p: Phase): boolean {
                 <Check class="w-3 h-3 text-emerald-500" /> {{ t('import.selectStep.reqPyFiles') }}
               </li>
               <li class="flex items-center gap-2">
-                <Check class="w-3 h-3 text-emerald-500" /> {{ t('import.selectStep.reqPython310') }}
+                <Check class="w-3 h-3 text-emerald-500" /> {{ t('import.selectStep.reqPython311') }}
               </li>
               <li class="flex items-center gap-2">
                 <Sparkles class="w-3 h-3 text-emerald-500" /> {{ t('import.selectStep.reqVenvAuto') }}
@@ -326,11 +336,11 @@ function isPhase(p: Phase): boolean {
           <div class="p-5 border-b border-zinc-200/80">
             <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-3">{{ t('import.reviewStep.envTitle') }}</p>
 
-            <!-- Python 3.12 + Pynguin 兼容性提醒 + 一键换 3.11 -->
-            <div v-if="pyVersionRisk" class="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-md">
+            <!-- 非 Python 3.11 + Pynguin 兼容性提醒 + 一键换 3.11（与 Overview 判定一致） -->
+            <div v-if="needs311Fix" class="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-md">
               <div class="flex items-start gap-2">
                 <AlertCircle class="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
-                <p class="text-xs leading-5 text-amber-700">{{ t('generate.py312Warning') }}</p>
+                <p class="text-xs leading-5 text-amber-700">{{ t('import.reviewStep.python311Required') }}</p>
               </div>
               <div class="mt-2">
                 <EnvFixWizard :project-path="projectPath" @fixed="onEnvFixed" />
@@ -345,11 +355,12 @@ function isPhase(p: Phase): boolean {
                   <span class="text-xs text-slate-700">{{ t('import.reviewStep.pythonInterpreter') }}</span>
                 </div>
                 <div v-if="envResult?.pythonPath && envResult.pythonVersion" class="flex items-center gap-2">
-                  <span class="text-xs font-mono text-slate-600">
+                  <span class="text-xs font-mono" :class="isPython311 ? 'text-slate-600' : 'text-amber-600'">
                     {{ envResult.pythonVersion }}
                     <span v-if="!envResult.venvExists" class="text-[10px] text-slate-400 ml-1">{{ t('import.reviewStep.global') }}</span>
                   </span>
-                  <Check class="w-3.5 h-3.5 text-emerald-500" />
+                  <Check v-if="isPython311" class="w-3.5 h-3.5 text-emerald-500" />
+                  <AlertCircle v-else class="w-3.5 h-3.5 text-amber-500" />
                 </div>
                 <div v-else class="flex items-center gap-2">
                   <span class="text-xs text-rose-600">{{ t('import.reviewStep.notFound') }}</span>
@@ -365,15 +376,23 @@ function isPhase(p: Phase): boolean {
                 </div>
                 <div v-if="envResult?.venvExists" class="flex items-center gap-2">
                   <span class="text-xs font-mono text-slate-600 truncate max-w-[220px]">{{ envResult.venvPath }}</span>
-                  <Check class="w-3.5 h-3.5 text-emerald-500" />
+                  <Check v-if="isPython311" class="w-3.5 h-3.5 text-emerald-500" />
+                  <span v-else class="flex items-center gap-1 text-xs font-medium text-amber-600">
+                    <AlertCircle class="w-3.5 h-3.5 text-amber-500" />
+                    {{ t('import.reviewStep.notPython311') }}
+                  </span>
                 </div>
-                <div v-else-if="envResult?.pythonPath" class="flex items-center gap-2">
+                <div v-else-if="envResult?.pythonPath && isPython311" class="flex items-center gap-2">
                   <span class="text-xs text-blue-600">{{ t('import.reviewStep.readyToCreate') }}</span>
                   <button @click="createVirtualEnv" :disabled="isPhase('detecting')"
                     class="btn btn-primary btn-sm">
                     <Loader2 v-if="isPhase('detecting')" class="w-3 h-3 animate-spin" />
                     <span v-else>{{ t('import.reviewStep.createVenv') }}</span>
                   </button>
+                </div>
+                <div v-else-if="envResult?.pythonPath" class="flex items-center gap-2">
+                  <span class="text-xs text-amber-600">{{ t('import.reviewStep.use311Fix') }}</span>
+                  <AlertCircle class="w-3.5 h-3.5 text-amber-500" />
                 </div>
                 <div v-else class="flex items-center gap-2">
                   <span class="text-xs text-rose-600">{{ t('import.reviewStep.pythonNotInstalled') }}</span>
@@ -408,7 +427,7 @@ function isPhase(p: Phase): boolean {
                 </div>
               </div>
 
-              <div v-else-if="envResult?.pythonPath" class="px-3 py-3 bg-blue-50 rounded-md border border-blue-100">
+              <div v-else-if="envResult?.pythonPath && isPython311" class="px-3 py-3 bg-blue-50 rounded-md border border-blue-100">
                 <p class="text-xs text-blue-700 flex items-start gap-2">
                   <AlertCircle class="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
                   {{ t('import.reviewStep.venvRequired') }}
@@ -434,7 +453,7 @@ function isPhase(p: Phase): boolean {
             </button>
 
             <div class="flex items-center gap-2">
-              <button v-if="missingDeps.length > 0 && phase === 'review'" @click="installMissingDeps"
+              <button v-if="missingDeps.length > 0 && !needs311Fix && phase === 'review'" @click="installMissingDeps"
                 class="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-medium rounded-md transition-colors active:scale-[0.98] flex items-center gap-1.5">
                 <Sparkles class="w-3.5 h-3.5" />
                 {{ t('import.reviewStep.installMissing', { count: missingDeps.length }) }}

@@ -125,7 +125,7 @@ export default {
       untitled: "未命名项目",
       requirements: "要求",
       reqPyFiles: "包含 .py 或配置文件",
-      reqPython310: "已全局安装 Python 3.10+",
+      reqPython311: "已全局安装 Python 3.11+",
       reqVenvAuto: "将自动创建虚拟环境",
     },
     detectStep: {
@@ -154,6 +154,10 @@ export default {
       failed: "失败",
       missing: "缺失",
       venvRequired: "需要虚拟环境。请点击上方\"创建 .venv\"继续。",
+      python311Required:
+        "检测到 Python 非 3.11 —— Pynguin 0.43+ 需要 Python 3.11（3.12+ 存在已知插桩缺陷）。请使用下方一键修复安装 Python 3.11 并用它创建/重建虚拟环境。",
+      notPython311: "非 Python 3.11",
+      use311Fix: "需 Python 3.11 —— 请使用上方一键修复",
       installingWarning: "正在安装依赖。请勿关闭此窗口，以免损坏虚拟环境。",
       installMissing: "安装缺失依赖（{count}）",
       installFailed: "安装失败：{packages}。请检查网络后重试。",
@@ -247,6 +251,7 @@ export default {
     rebuildTitle: "用 Python 3.11 重建 .venv",
     rebuildConfirmDesc: "将删除当前 .venv 并用 Python 3.11 重建，随后重新安装项目依赖。确定继续吗？",
     envStageWinget: "正在安装 Python 3.11（winget）…",
+    envStageDownload: "正在下载并安装 Python 3.11…",
     envStageVenv: "正在用 Python 3.11 创建 .venv…",
     envStageDeps: "正在安装依赖…",
     envStageDb: "正在更新项目解释器…",
@@ -638,6 +643,7 @@ export default {
     done: "环境已就绪，请重新生成。",
     stage: {
       winget: "安装 Python 3.11（winget）",
+      download: "下载并安装 Python 3.11",
       venv: "重建虚拟环境",
       deps: "安装项目依赖",
       db: "更新项目解释器",
@@ -966,7 +972,7 @@ export default {
       issue: "现象",
       fix: "处理",
       rows: [
-        { issue: "导入时提示未安装 Python", fix: "安装 Python 3.10+ 后重启应用。" },
+        { issue: "导入时提示未安装 Python", fix: "安装 Python 3.11 后重启应用。" },
         { issue: "执行页没有测试用例", fix: "确认项目包含 test_*.py / *_test.py 文件且已安装 pytest。" },
         { issue: "生成结果为空", fix: "确认所选模块可正常 import，并考虑增大搜索时间。" },
         { issue: "覆盖率按钮禁用", fix: "先在覆盖率页点击安装 coverage.py。" },
@@ -977,7 +983,7 @@ export default {
       title: "系统要求与数据",
       points: [
         "操作系统：Linux（x86_64）、Windows 10/11、macOS 12+。",
-        "需要 Python 3.10 及以上（Pynguin 依赖）。",
+        "需要 Python 3.11（Pynguin 依赖）。",
         "仅克隆远程仓库功能需要 Git。",
         "数据存于应用配置目录下的 SQLite（pytest_auto.db）；覆盖率明细与导出报告存放在各项目独立子目录。",
       ],

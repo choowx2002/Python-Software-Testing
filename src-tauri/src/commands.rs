@@ -29,7 +29,7 @@ pub struct GenerationEnvInfo {
     pub bytecode_version: Option<String>,
 }
 
-/// 一键修复环境时发出的阶段性进度事件（stage: winget / venv / deps / db / done）
+/// 一键修复环境时发出的阶段性进度事件（stage: winget / download / venv / deps / db / done）
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvFixStep {

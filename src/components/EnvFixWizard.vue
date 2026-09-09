@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * EnvFixWizard —— 一键修复生成环境（Python 3.11）
- * 流程：winget 安装 3.11（如需）→ 重建 .venv → 安装依赖 →（可选）更新项目解释器
+ * 流程：安装 Python 3.11（Windows winget / Linux/macOS 用户级下载）→ 重建 .venv → 安装依赖
+ *   →（可选）更新项目解释器
  * 进度通过 "env-fix-step" 事件实时展示；完成后 emit('fixed') 由父级刷新状态。
  * 用法：
  *   <EnvFixWizard :project-path="projectPath" :project-id="projectId" @fixed="onFixed" />

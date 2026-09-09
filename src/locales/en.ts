@@ -125,7 +125,7 @@ selectStep: {
       untitled: "Untitled Project",
       requirements: "Requirements",
       reqPyFiles: "Contains .py or config files",
-      reqPython310: "Python 3.10+ installed globally",
+      reqPython311: "Python 3.11+ installed globally",
       reqVenvAuto: "Virtual environment will be created automatically",
     },
     detectStep: {
@@ -154,6 +154,10 @@ reviewStep: {
       failed: "Failed",
       missing: "Missing",
       venvRequired: "A virtual environment is required. Click \"Create .venv\" above to proceed.",
+      python311Required:
+        "Python is not 3.11 — Pynguin 0.43+ requires Python 3.11 (3.12+ has a known instrumentation bug). Use the fix below to install Python 3.11 and create/rebuild the virtual environment with it.",
+      notPython311: "Not Python 3.11",
+      use311Fix: "Requires Python 3.11 — use the fix above",
       installingWarning: "Installing dependencies. Please do not close this window to avoid corrupting the virtual environment.",
       installMissing: "Install Missing ({count})",
       installFailed: "Failed to install: {packages}. Please check your network or try again.",
@@ -247,6 +251,7 @@ reviewStep: {
     rebuildTitle: "Rebuild .venv with Python 3.11",
     rebuildConfirmDesc: "This deletes the current .venv and recreates it with Python 3.11, then reinstalls the project dependencies. Continue?",
     envStageWinget: "Installing Python 3.11 (winget)…",
+    envStageDownload: "Downloading & installing Python 3.11…",
     envStageVenv: "Creating .venv with Python 3.11…",
     envStageDeps: "Installing dependencies…",
     envStageDb: "Updating project interpreter…",
@@ -638,6 +643,7 @@ reviewStep: {
     done: "Environment ready — try again.",
     stage: {
       winget: "Installing Python 3.11 (winget)",
+      download: "Downloading & installing Python 3.11",
       venv: "Rebuilding virtual environment",
       deps: "Installing project dependencies",
       db: "Updating project interpreter",
@@ -967,7 +973,7 @@ reviewStep: {
       issue: "Issue",
       fix: "Fix",
       rows: [
-        { issue: "Import reports that Python is missing", fix: "Install Python 3.10+ and restart the app." },
+        { issue: "Import reports that Python is missing", fix: "Install Python 3.11 and restart the app." },
         { issue: "No test cases on the Execute page", fix: "Make sure the project contains test_*.py / *_test.py files and pytest is installed." },
         { issue: "Generation returns empty results", fix: "Ensure the selected modules import cleanly, and consider increasing the search time." },
         { issue: "The coverage button is disabled", fix: "Install coverage.py first on the Coverage page." },
@@ -978,7 +984,7 @@ reviewStep: {
       title: "System Requirements & Data",
       points: [
         "OS: Linux (x86_64), Windows 10/11, macOS 12+.",
-        "Python 3.10+ is required (Pynguin depends on it).",
+        "Python 3.11 is required (Pynguin depends on it).",
         "Git is only needed for cloning remote repositories.",
         "Data is stored in SQLite (pytest_auto.db) in the app config directory; coverage details and exports live in per-project subdirectories.",
       ],
